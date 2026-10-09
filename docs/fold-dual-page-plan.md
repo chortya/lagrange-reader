@@ -162,3 +162,16 @@ If this is revisited, the path would be to reuse the Phase 3 spread pager throug
 1. **Target device: Z Fold8 (wide).** The primary posture is the natural unfolded landscape, with the hinge vertical and one page on each side of it. Test first on Fold8 (physical device or Remote Test Lab SM-F971). The Ultra and other foldables are covered by the same geometry policy but are secondary in the test matrix.
 2. **PDF is out of scope.** Phase 4 is dropped, PDF keeps native single-page PDFium behavior, and there's no divergence from upstream PR #269.
 3. **Work happens on a GitHub fork** (`chortya/lagrange-reader`) with `upstream` → `van-geaux/lagrange-reader`. Upstreaming the EPUB part stays optional.
+4. **Added scope: true OLED white-on-black design for EPUB only.** Comics stay full colour.
+
+## 6. Implementation status (2026-10-09)
+
+| Phase | Status | Notes |
+|---|---|---|
+| 0 Setup | Done | Fork `chortya/lagrange-reader`. Baseline 837 JVM tests green. The 5 parser tests that fail on a non-English host locale are pre-existing; run Gradle with `JAVA_TOOL_OPTIONS="-Duser.language=en -Duser.country=US"`. Pixel Fold API 36 AVD used as the Fold8 stand-in. |
+| 1 Foundation | Done | `ReaderSpreadPolicy`, `ReaderWindowTracker` (`androidx.window` 1.5.1, compileSdk 35 unchanged), per-library preferences and options UI. |
+| 2 EPUB | Done | Readium reflowable `columnCount` / fixed-layout `spread`, plus `RsProperties` to bypass ReadiumCSS's 60em media query (found during implementation: the Fold8 window is under 960 CSS px), plus a per-column gutter. |
+| OLED | Done | Pure black/white page, chrome, sheets, dialogs, window and status bar. In-page white links and selection. Images untouched. |
+| 3 Comics | Done | `ComicSpreadReader` pager: cover alone, shift, wide pages shown alone, RTL, zoom, export, spread navigation, first-page resume / last-page progress. |
+| 4 PDF | Out of scope | — |
+| 5 Validation | Automated done; device pending | JVM 905 tests, lint clean, connected suite on Pixel Fold AVD. A physical Fold8 / Remote Test Lab pass is still required (see `docs/testing.md` → Foldable spreads and OLED EPUB). |
