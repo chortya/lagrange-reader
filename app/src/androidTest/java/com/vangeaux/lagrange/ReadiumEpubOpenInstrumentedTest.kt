@@ -38,6 +38,7 @@ import org.readium.navigator.media.tts.AndroidTtsNavigatorFactory
 import org.readium.navigator.media.tts.TtsNavigator
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.preferences.ColumnCount
+import org.readium.r2.navigator.preferences.Spread
 import org.readium.r2.navigator.preferences.FontFamily
 import org.readium.r2.navigator.preferences.Theme
 import org.readium.r2.shared.ExperimentalReadiumApi
@@ -451,6 +452,64 @@ class ReadiumEpubOpenInstrumentedTest {
                 fontFamily = EpubReaderFontFamily.OPEN_DYSLEXIC
             ).fontFamily
         )
+    }
+
+    @OptIn(ExperimentalReadiumApi::class)
+    @Test
+    fun singlePagePreferencesKeepOneColumnWithoutPageMargins() {
+        val preferences = readiumPreferences(EpubReaderTheme.Sepia, fontScale = 1f)
+
+        assertEquals(ColumnCount.ONE, preferences.columnCount)
+        assertEquals(0.0, requireNotNull(preferences.pageMargins), 0.0)
+        assertEquals(Spread.NEVER, preferences.spread)
+        assertEquals(false, preferences.scroll)
+    }
+
+    @OptIn(ExperimentalReadiumApi::class)
+    @Test
+    fun paginatedSpreadRequestsTwoColumnsFixedLayoutSpreadsAndGutters() {
+        val preferences = readiumPreferences(
+            EpubReaderTheme.OledBlack,
+            fontScale = 1.2f,
+            layoutMode = ReaderLayoutMode.PAGINATED,
+            twoPageSpread = true
+        )
+
+        assertEquals(ColumnCount.TWO, preferences.columnCount)
+        assertEquals(1.0, requireNotNull(preferences.pageMargins), 0.0)
+        assertEquals(Spread.ALWAYS, preferences.spread)
+        assertEquals(false, preferences.scroll)
+    }
+
+    @OptIn(ExperimentalReadiumApi::class)
+    @Test
+    fun continuousLayoutIgnoresSpreadRequest() {
+        val preferences = readiumPreferences(
+            EpubReaderTheme.Dark,
+            fontScale = 1f,
+            layoutMode = ReaderLayoutMode.CONTINUOUS,
+            twoPageSpread = true
+        )
+
+        assertEquals(ColumnCount.ONE, preferences.columnCount)
+        assertEquals(0.0, requireNotNull(preferences.pageMargins), 0.0)
+        assertEquals(Spread.NEVER, preferences.spread)
+        assertEquals(true, preferences.scroll)
+    }
+
+    @OptIn(ExperimentalReadiumApi::class)
+    @Test
+    fun spreadLeavesTypographyPreferencesUnchanged() {
+        fun preferences(spread: Boolean) = readiumPreferences(
+            EpubReaderTheme.Light,
+            fontScale = 1.4f,
+            lineSpacing = 1.5f,
+            fontFamily = EpubReaderFontFamily.SYSTEM_SERIF,
+            wordSpacing = 0.3f,
+            twoPageSpread = spread
+        ).copy(columnCount = null, pageMargins = null, spread = null)
+
+        assertEquals(preferences(false), preferences(true))
     }
 
     @Test
