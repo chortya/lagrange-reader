@@ -324,8 +324,18 @@ private const val EPUB_IMAGE_GESTURE_ASSET = "epub-image-gesture.js"
 private const val EPUB_IMAGE_GESTURE_PROBE_SCRIPT =
     "(function(){const k='__bookorbitImageGesture';const v=window[k]||null;window[k]=null;return v;})()"
 
-internal fun epubCurrentDocumentInstallScript(gestureScript: String): String =
-    readiumEpubImageColorOverrideScript() + "\n" + gestureScript
+internal fun epubCurrentDocumentInstallScript(
+    gestureScript: String,
+    oledText: Boolean = false
+): String = buildString {
+    append(readiumEpubImageColorOverrideScript())
+    if (oledText) {
+        append("\n")
+        append(readiumEpubOledTextStyleScript())
+    }
+    append("\n")
+    append(gestureScript)
+}
 
 internal suspend fun runEpubCurrentDocumentBridgeLoop(
     installScript: String,
@@ -735,6 +745,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
             !isTapZoneTutorialVisible()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(epubReaderActivityThemeRes(initialReaderTheme()))
         requestWindowFeature(Window.FEATURE_NO_TITLE)
         if (savedInstanceState != null) {
             supportFragmentManager.fragmentFactory = EpubNavigatorFragment.createDummyFactory()
@@ -877,7 +888,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         )
         viewOnlyBannerView = ComposeView(this).apply {
             visibility = if (isPreview) View.VISIBLE else View.GONE
-            setContent { BookOrbitTheme { ViewOnlyModeBanner(onConfirmReadMode = ::enableReadMode) } }
+            setContent { EpubReaderMaterialTheme(selectedTheme) { ViewOnlyModeBanner(onConfirmReadMode = ::enableReadMode) } }
             addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyReaderPadding() }
             ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
                 val statusBarTop = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
@@ -908,7 +919,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         }
         footerView = ComposeView(this).apply {
             setContent {
-                BookOrbitTheme {
+                EpubReaderMaterialTheme(selectedTheme) {
                     EpubReaderProgressFooter(
                         status = currentProgressStatus(),
                         theme = selectedTheme,
@@ -928,7 +939,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         chromeView = ComposeView(this).apply {
             visibility = View.GONE
             setContent {
-                BookOrbitTheme {
+                EpubReaderMaterialTheme(selectedTheme) {
                     ReaderLightweightChrome(
                         title = if (isPreview) "Preview · $displayTitle" else displayTitle,
                         theme = selectedTheme,
@@ -976,7 +987,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         optionsView = ComposeView(this).apply {
             visibility = View.GONE
             setContent {
-                BookOrbitTheme {
+                EpubReaderMaterialTheme(selectedTheme) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         EpubReaderDismissScrim(onDismiss = ::hideOptions)
                         EpubReaderOptionsBottomSheet(
@@ -1008,7 +1019,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
             visibility = View.GONE
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
             setContent {
-                BookOrbitTheme {
+                EpubReaderMaterialTheme(selectedTheme) {
                     ReaderTapZoneTutorial(
                         onDismiss = ::hideTapZoneTutorial,
                         readingDirection = readingDirection,
@@ -1028,7 +1039,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         )
         val epubImageViewerView = ComposeView(this).apply {
             setContent {
-                BookOrbitTheme {
+                EpubReaderMaterialTheme(selectedTheme) {
                     epubImageViewer?.let { (_, bitmap) ->
                         ComicPageImageViewer(
                             title = displayTitle,
@@ -1056,7 +1067,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         mediaOverlayView = ComposeView(this).apply {
             visibility = if (mediaOverlayPlayback.player == null) View.GONE else View.VISIBLE
             setContent {
-                BookOrbitTheme {
+                EpubReaderMaterialTheme(selectedTheme) {
                     val clip = mediaOverlayPlayback.activeClip
                     if (clip != null) {
                         EpubMediaOverlayControls(
@@ -1087,7 +1098,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         ttsView = ComposeView(this).apply {
             visibility = View.GONE
             setContent {
-                BookOrbitTheme {
+                EpubReaderMaterialTheme(selectedTheme) {
                     EpubTtsControls(
                         settings = ttsSettings,
                         isPlaying = ttsIsPlaying,
@@ -1991,7 +2002,11 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         val gestureScript = runCatching {
             assets.open(EPUB_IMAGE_GESTURE_ASSET).bufferedReader().use { it.readText() }
         }.getOrNull() ?: return
-        val installScript = epubCurrentDocumentInstallScript(gestureScript)
+        // OLED in-page styling is fixed per navigator: switching into or out of OLED recreates.
+        val installScript = epubCurrentDocumentInstallScript(
+            gestureScript,
+            oledText = selectedTheme.isOled()
+        )
         epubImageGestureJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 runEpubCurrentDocumentBridgeLoop(
@@ -2650,6 +2665,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
 
     private fun applyReaderPreferences(next: LibraryReaderPreferences) {
         val normalized = next.normalized()
+        val previousTheme = readerPreferences.theme
         val tapZoneChanged = readerTapZonePreferencesChanged(readerPreferences, normalized)
         readerPreferences = normalized
         selectedTheme = normalized.theme
@@ -2680,8 +2696,19 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
             current.withReaderPreferences(libraryId, normalized)
         )
         configureSystemBars()
+        if (epubReaderThemeChangeRequiresRecreate(previousTheme, normalized.theme)) {
+            recreate()
+            return
+        }
         if (recreateIfSpreadChanged()) return
         if (tapZoneChanged && showTapZoneTutorialAfterChanges) showTapZoneTutorial()
+    }
+
+    /** Mirrors the reader-preference resolution in [onCreate] so the window theme matches it. */
+    private fun initialReaderTheme(): EpubReaderTheme {
+        val library = intent.getStringExtra(EXTRA_LIBRARY_ID).orEmpty()
+        return appPreferencesStore.read().libraryReaderPreferences[library]?.theme
+            ?: themeStore.read()
     }
 
     private fun computeTwoPageSpread(): Boolean = shouldUseTwoPageSpread(
@@ -2881,6 +2908,8 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         }
         window.statusBarColor = selectedTheme.backgroundColor
         window.navigationBarColor = Color.BLACK
+        // Android 15 draws the status-bar strip from the window background, not statusBarColor.
+        window.setBackgroundDrawable(ColorDrawable(selectedTheme.backgroundColor))
     }
 
     private fun chapterTitle(tableOfContents: List<Link>, resource: Link): String? {
