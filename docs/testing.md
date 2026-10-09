@@ -81,6 +81,16 @@ On an unfolded foldable or a large landscape tablet:
 - Confirm the following still work: resume position after fold/unfold or rotation, TTS sentence highlighting and auto page-turn across columns, highlights spanning the column boundary, and tap zones.
 - Comics and PDF stay single-page.
 
+### OLED EPUB theme
+
+Automated coverage: `EpubOledThemeTest` (JVM); `EpubOledWebViewInstrumentedTest` (connected).
+
+- Choosing `OLED black` shows pure white text and links on pure black.
+- The following are all black, with white primary content and hairline edges: the status-bar strip, reader chrome, options sheet, chapter list, TTS/read-along panels, and system dialogs.
+- Text selection is white with black text, and illustrations keep their original colours.
+- Switching into or out of OLED reopens the reader at the same position.
+- PDF and comics are unaffected.
+
 ### EPUB Image Library
 
 For a downloaded EPUB, verify the EPUB-only Image Library action, document-order image listing, duplicate suppression, SVG exclusion, minimum-size filtering, thumbnail navigation, bounded zoom/pan, outside-tap and Back dismissal, and original-image export. For an online EPUB, consent must start the normal durable selected-file download; the gallery opens only after download success. Offline missing content must report unavailable without a consent prompt.

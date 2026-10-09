@@ -19,6 +19,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -1389,7 +1390,9 @@ internal fun ReaderLightweightChrome(
     val parentTypography = MaterialTheme.typography
     val parentShapes = MaterialTheme.shapes
     val colors = remember(theme) {
-        if (theme == EpubReaderTheme.Dark) {
+        if (theme.isOled()) {
+            oledReaderColorScheme()
+        } else if (theme == EpubReaderTheme.Dark) {
             darkColorScheme(
                 primary = Color(palette.accent),
                 onPrimary = Color(palette.onAccent),
@@ -1420,6 +1423,8 @@ internal fun ReaderLightweightChrome(
         }
     }
 
+    // OLED chrome is opaque so page text never bleeds through a black bar.
+    val chromeSurfaceAlpha = if (theme.isOled()) 1f else 0.96f
     MaterialTheme(colorScheme = colors, typography = parentTypography, shapes = parentShapes) {
         BoxWithConstraints(modifier = modifier.fillMaxSize()) {
             val positionControlHeight = (maxHeight * READER_POSITION_CONTROL_HEIGHT_FRACTION)
@@ -1436,7 +1441,7 @@ internal fun ReaderLightweightChrome(
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top))
                     .testTag("reader-lightweight-top-bar"),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = chromeSurfaceAlpha),
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 shadowElevation = 5.dp
             ) {
@@ -1469,7 +1474,7 @@ internal fun ReaderLightweightChrome(
                     .height(positionControlHeight)
                     .testTag("reader-lightweight-position-control"),
                 shape = RoundedCornerShape(topStart = 22.dp, bottomStart = 22.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = chromeSurfaceAlpha),
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 shadowElevation = 5.dp
             ) {
@@ -1594,7 +1599,7 @@ internal fun ReaderLightweightChrome(
                     .fillMaxWidth()
                     .padding(bottom = EPUB_READER_PROGRESS_FOOTER_HEIGHT)
                     .testTag("reader-lightweight-bottom-bar"),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = chromeSurfaceAlpha),
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 shadowElevation = 5.dp
             ) {
@@ -1656,12 +1661,16 @@ private fun ReaderPositionListDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        // On a pure black (OLED) scheme shadows and container fills are invisible, so edges and
+        // the current entry are drawn with hairline outlines instead.
+        val outlineOnly = MaterialTheme.colorScheme.primaryContainer == MaterialTheme.colorScheme.surface
         Surface(
             modifier = Modifier.fillMaxWidth(0.9f).heightIn(max = 560.dp),
             shape = RoundedCornerShape(24.dp),
             color = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
-            shadowElevation = 12.dp
+            shadowElevation = 12.dp,
+            border = if (outlineOnly) BorderStroke(1.dp, MaterialTheme.colorScheme.outline) else null
         ) {
             Column(modifier = Modifier.padding(vertical = 12.dp)) {
                 Text(
@@ -1686,7 +1695,10 @@ private fun ReaderPositionListDialog(
                             } else {
                                 Color.Transparent
                             },
-                            shape = RoundedCornerShape(12.dp)
+                            shape = RoundedCornerShape(12.dp),
+                            border = if (selected && outlineOnly) {
+                                BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                            } else null
                         ) {
                             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                                 Text(
@@ -1749,13 +1761,13 @@ internal fun EpubReaderTheme.readerOptionsPalette(): EpubReaderOptionsPalette = 
         outline = 0xFF8B8175.toInt()
     )
     EpubReaderTheme.OledBlack -> EpubReaderOptionsPalette(
-        container = 0xFF000000.toInt(),
-        content = 0xFFF5F5F6.toInt(),
-        mutedContent = 0xFFCECDD2.toInt(),
-        accent = 0xFFA8CDE0.toInt(),
-        onAccent = 0xFF073447.toInt(),
-        surfaceVariant = 0xFF1C1C1E.toInt(),
-        outline = 0xFF96959B.toInt()
+        container = OLED_BLACK_ARGB,
+        content = OLED_WHITE_ARGB,
+        mutedContent = OLED_MUTED_ARGB,
+        accent = OLED_WHITE_ARGB,
+        onAccent = OLED_BLACK_ARGB,
+        surfaceVariant = OLED_HAIRLINE_ARGB,
+        outline = OLED_OUTLINE_ARGB
     )
 }
 
@@ -1777,7 +1789,9 @@ internal fun EpubReaderOptionsBottomSheet(
     val parentShapes = MaterialTheme.shapes
     val colors = remember(preferences.theme) {
         val palette = preferences.theme.readerOptionsPalette()
-        if (preferences.theme == EpubReaderTheme.Dark || preferences.theme == EpubReaderTheme.OledBlack) {
+        if (preferences.theme.isOled()) {
+            oledReaderColorScheme()
+        } else if (preferences.theme == EpubReaderTheme.Dark) {
             darkColorScheme(
                 primary = Color(palette.accent),
                 onPrimary = Color(palette.onAccent),
@@ -2661,7 +2675,7 @@ enum class EpubReaderTheme(
         label = "OLED black",
         backgroundColor = 0xFF000000.toInt(),
         backgroundCss = "#000000",
-        foregroundCss = "#F5F5F6",
-        linkCss = "#A8CDE0"
+        foregroundCss = "#FFFFFF",
+        linkCss = "#FFFFFF"
     )
 }
