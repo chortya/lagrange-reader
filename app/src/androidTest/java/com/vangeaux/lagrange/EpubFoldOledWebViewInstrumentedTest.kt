@@ -60,21 +60,19 @@ class EpubFoldOledWebViewInstrumentedTest {
                     """
                     JSON.stringify((function() {
                       const width = window.innerWidth;
-                      const lefts = Array.from(document.querySelectorAll('p'))
-                        .map(p => p.getBoundingClientRect())
-                        .filter(r => r.left >= 0 && r.left < width)
-                        .map(r => r.left);
-                      const rights = Array.from(document.querySelectorAll('p'))
-                        .map(p => p.getBoundingClientRect())
-                        .filter(r => r.left >= 0 && r.right <= width / 2 + 1)
-                        .map(r => r.right);
+                      const half = width / 2;
+                      const rects = Array.from(document.querySelectorAll('p'))
+                        .flatMap(p => Array.from(p.getClientRects()))
+                        .filter(r => r.width > 0 && r.left >= 0 && r.left < width);
+                      const first = rects.filter(r => r.left < half);
+                      const second = rects.filter(r => r.left >= half);
                       return {
                         width: width,
                         belowBreakpoint: !window.matchMedia('(min-width: 60em)').matches,
                         columnCount: getComputedStyle(document.documentElement).columnCount,
                         bodyPaddingLeft: getComputedStyle(document.body).paddingLeft,
-                        firstColumnRight: Math.max.apply(null, rights),
-                        secondColumnLeft: Math.max.apply(null, lefts)
+                        firstColumnRight: first.length ? Math.max.apply(null, first.map(r => r.right)) : -1,
+                        secondColumnLeft: second.length ? Math.min.apply(null, second.map(r => r.left)) : -1
                       };
                     })())
                     """.trimIndent()

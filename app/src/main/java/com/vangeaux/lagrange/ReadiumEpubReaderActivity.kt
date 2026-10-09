@@ -2832,6 +2832,11 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
 
     internal fun hasShownTapZoneTutorial(): Boolean = tapZoneTutorialHasShown
 
+    internal fun isTwoPageSpreadActive(): Boolean = twoPageSpreadActive
+
+    internal suspend fun evaluateReaderJavascript(script: String): String? =
+        navigator?.evaluateJavascript(script)
+
     private fun updateResult(reason: ReaderCompletionReason? = null) {
         val data = Intent().apply {
             reason?.let { putExtra(EXTRA_READER_COMPLETION_REASON, it.name) }

@@ -1,0 +1,391 @@
+package com.vangeaux.lagrange
+
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
+import android.os.SystemClock
+import androidx.test.core.app.ActivityScenario
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.util.zip.CRC32
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/**
+ * End-to-end reader checks for foldable spreads and the OLED EPUB theme. Readers are launched in a
+ * locked-landscape window. Spread assertions require a large (unfolded/tablet) window and are
+ * skipped with an assumption on phone-sized devices; single-page and OLED assertions always run.
+ */
+@RunWith(AndroidJUnit4::class)
+class FoldSpreadOledActivityInstrumentedTest {
+    private val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+    private val store = AppPreferencesStore(context)
+    private lateinit var original: AppPreferences
+    private val libraryId = "instrumented-fold-${System.nanoTime()}"
+
+    @Before
+    fun saveOriginalPreferences() {
+        original = store.read()
+    }
+
+    @After
+    fun restoreOriginalPreferences() {
+        store.save(original)
+    }
+
+    private fun useProfile(profile: LibraryReaderPreferences) {
+        store.save(
+            original.copy(
+                lockOrientation = true,
+                lockedOrientation = LockedOrientation.LANDSCAPE
+            ).withReaderPreferences(libraryId, profile)
+        )
+    }
+
+    private fun <A : android.app.Activity> awaitCondition(
+        scenario: ActivityScenario<A>,
+        message: String,
+        condition: (A) -> Boolean
+    ) {
+        repeat(60) {
+            var satisfied = false
+            scenario.onActivity { activity -> satisfied = condition(activity) }
+            if (satisfied) return
+            SystemClock.sleep(250)
+        }
+        throw AssertionError(message)
+    }
+
+    private fun windowQualifiesForSpread(activity: android.app.Activity): Boolean =
+        shouldUseTwoPageSpread(
+            ReaderSpreadMode.AUTO,
+            ReaderWindowState.fromConfiguration(activity.resources.configuration),
+            ReaderLayoutMode.PAGINATED
+        )
+
+    // ---- Comics ----
+
+    @Test
+    fun comicOpensAsTwoPageSpreadOnLargeHorizontalWindowAndResumesAfterRecreation() {
+        val cbz = File(context.cacheDir, "fold-spread-${System.nanoTime()}.cbz")
+        val readerKey = "fold-spread-comic-${System.nanoTime()}"
+        writeCbz(cbz, 7)
+        useProfile(LibraryReaderPreferences(twoPageSpread = ReaderSpreadMode.AUTO))
+        try {
+            ActivityScenario.launch<ReadiumComicReaderActivity>(
+                ReadiumComicReaderActivity.createIntent(
+                    context = context,
+                    file = cbz,
+                    title = "Fold spread",
+                    readerKey = readerKey,
+                    libraryId = libraryId,
+                    launchMode = ReaderLaunchMode.NORMAL,
+                    initialPage = 4
+                )
+            ).use { scenario ->
+                var qualifies = false
+                awaitCondition(scenario, "comic reader did not settle") { activity ->
+                    qualifies = windowQualifiesForSpread(activity)
+                    activity.isComicSpreadReaderVisible() == qualifies &&
+                        ReadiumComicLocatorStore(context).read(readerKey) != null
+                }
+                assumeTrue("Requires a large horizontal window (unfolded foldable or tablet)", qualifies)
+
+                // Page 5 (index 4) belongs to the spread 4–5 (indexes 3, 4): resume is the first page.
+                val stored = requireNotNull(ReadiumComicLocatorStore(context).read(readerKey))
+                assertTrue(stored.href.toString().endsWith("0003.jpg"))
+
+                scenario.recreate()
+                awaitCondition(scenario, "spread did not survive recreation") { activity ->
+                    activity.isComicSpreadReaderVisible()
+                }
+                val restored = requireNotNull(ReadiumComicLocatorStore(context).read(readerKey))
+                assertEquals(stored.href, restored.href)
+                scenario.onActivity { activity ->
+                    assertEquals(
+                        "the Readium image navigator must not be installed in spread mode",
+                        0,
+                        activity.supportFragmentManager.fragments.count { it.tag == "readium_comic_navigator" }
+                    )
+                }
+            }
+        } finally {
+            cbz.delete()
+        }
+    }
+
+    @Test
+    fun comicSpreadPreferenceOffKeepsTheSinglePageNavigator() {
+        val cbz = File(context.cacheDir, "fold-single-${System.nanoTime()}.cbz")
+        val readerKey = "fold-single-comic-${System.nanoTime()}"
+        writeCbz(cbz, 4)
+        useProfile(LibraryReaderPreferences(twoPageSpread = ReaderSpreadMode.OFF))
+        try {
+            ActivityScenario.launch<ReadiumComicReaderActivity>(
+                ReadiumComicReaderActivity.createIntent(
+                    context = context,
+                    file = cbz,
+                    title = "Fold single",
+                    readerKey = readerKey,
+                    libraryId = libraryId,
+                    launchMode = ReaderLaunchMode.NORMAL,
+                    initialPage = 0
+                )
+            ).use { scenario ->
+                awaitCondition(scenario, "single-page comic navigator did not open") { activity ->
+                    activity.supportFragmentManager.fragments.any { it.tag == "readium_comic_navigator" }
+                }
+                scenario.onActivity { activity -> assertFalse(activity.isComicSpreadReaderVisible()) }
+            }
+        } finally {
+            cbz.delete()
+        }
+    }
+
+    // ---- EPUB ----
+
+    @Test
+    fun epubUsesTwoColumnsOnLargeHorizontalWindowAndOneOtherwise(): Unit = runBlocking {
+        val epub = File(context.cacheDir, "fold-spread-${System.nanoTime()}.epub")
+        val readerKey = "fold-spread-epub-${System.nanoTime()}"
+        writeEpub(epub)
+        useProfile(LibraryReaderPreferences(twoPageSpread = ReaderSpreadMode.AUTO))
+        try {
+            launchEpub(epub, readerKey).use { scenario ->
+                awaitEpubReady(scenario, readerKey)
+                var qualifies = false
+                var active = false
+                scenario.onActivity { activity ->
+                    qualifies = windowQualifiesForSpread(activity)
+                    active = activity.isTwoPageSpreadActive()
+                }
+                assertEquals(qualifies, active)
+                val columns = awaitJavascript(scenario, "getComputedStyle(document.documentElement).columnCount")
+                assertEquals(if (qualifies) "\"2\"" else "\"1\"", columns)
+            }
+        } finally {
+            epub.delete()
+        }
+    }
+
+    @Test
+    fun epubSpreadPreferenceOffKeepsOneColumn(): Unit = runBlocking {
+        val epub = File(context.cacheDir, "fold-off-${System.nanoTime()}.epub")
+        val readerKey = "fold-off-epub-${System.nanoTime()}"
+        writeEpub(epub)
+        useProfile(LibraryReaderPreferences(twoPageSpread = ReaderSpreadMode.OFF))
+        try {
+            launchEpub(epub, readerKey).use { scenario ->
+                awaitEpubReady(scenario, readerKey)
+                scenario.onActivity { activity -> assertFalse(activity.isTwoPageSpreadActive()) }
+            }
+        } finally {
+            epub.delete()
+        }
+    }
+
+    @Test
+    fun oledEpubRendersPureWhiteOnPureBlackInPageAndWindow(): Unit = runBlocking {
+        val epub = File(context.cacheDir, "oled-${System.nanoTime()}.epub")
+        val readerKey = "oled-epub-${System.nanoTime()}"
+        writeEpub(epub)
+        useProfile(LibraryReaderPreferences(theme = EpubReaderTheme.OledBlack))
+        try {
+            launchEpub(epub, readerKey).use { scenario ->
+                awaitEpubReady(scenario, readerKey)
+                scenario.onActivity { activity ->
+                    val background = activity.window.decorView.background
+                    assertTrue(background is ColorDrawable)
+                    assertEquals(Color.BLACK, (background as ColorDrawable).color)
+                }
+                // The bridge loop installs the OLED page style shortly after the document loads.
+                assertEquals(
+                    "true",
+                    awaitJavascript(scenario, "document.getElementById('lagrange-readium-epub-oled-text') !== null") {
+                        it == "true"
+                    }
+                )
+                assertEquals(
+                    "\"rgb(255, 255, 255)\"",
+                    awaitJavascript(scenario, "getComputedStyle(document.getElementById('link')).color")
+                )
+                assertEquals(
+                    "\"rgb(255, 255, 255)\"",
+                    awaitJavascript(scenario, "getComputedStyle(document.querySelector('p')).color")
+                )
+                assertEquals(
+                    "\"rgb(0, 0, 0)\"",
+                    awaitJavascript(scenario, "getComputedStyle(document.documentElement).backgroundColor")
+                )
+            }
+        } finally {
+            epub.delete()
+        }
+    }
+
+    @Test
+    fun nonOledEpubDoesNotInstallOledPageStyle(): Unit = runBlocking {
+        val epub = File(context.cacheDir, "dark-${System.nanoTime()}.epub")
+        val readerKey = "dark-epub-${System.nanoTime()}"
+        writeEpub(epub)
+        useProfile(LibraryReaderPreferences(theme = EpubReaderTheme.Dark))
+        try {
+            launchEpub(epub, readerKey).use { scenario ->
+                awaitEpubReady(scenario, readerKey)
+                // Wait for the bridge loop to install its own image style, then check OLED is absent.
+                awaitJavascript(
+                    scenario,
+                    "document.getElementById('bookorbit-readium-epub-image-color-preservation') !== null"
+                ) { it == "true" }
+                assertEquals(
+                    "false",
+                    awaitJavascript(scenario, "document.getElementById('lagrange-readium-epub-oled-text') !== null")
+                )
+            }
+        } finally {
+            epub.delete()
+        }
+    }
+
+    private fun launchEpub(epub: File, readerKey: String): ActivityScenario<ReadiumEpubReaderActivity> =
+        ActivityScenario.launch(
+            ReadiumEpubReaderActivity.createIntent(
+                context = context,
+                file = epub,
+                title = "Fold OLED",
+                readerKey = readerKey,
+                libraryId = libraryId,
+                launchMode = ReaderLaunchMode.NORMAL,
+                initialChapter = 0,
+                initialPage = 0,
+                initialPageCount = 1,
+                initialPercent = null
+            )
+        )
+
+    private fun awaitEpubReady(scenario: ActivityScenario<ReadiumEpubReaderActivity>, readerKey: String) {
+        repeat(60) {
+            var ready = false
+            scenario.onActivity { activity ->
+                ready = activity.supportFragmentManager
+                    .findFragmentByTag("readium_epub_navigator") != null
+            }
+            if (ready && ReadiumEpubLocatorStore(context).read(readerKey) != null) return
+            SystemClock.sleep(250)
+        }
+        throw AssertionError("EPUB reader did not become ready")
+    }
+
+    private suspend fun awaitJavascript(
+        scenario: ActivityScenario<ReadiumEpubReaderActivity>,
+        script: String,
+        accept: (String?) -> Boolean = { it != null && it != "null" }
+    ): String? {
+        var last: String? = null
+        repeat(40) {
+            lateinit var activity: ReadiumEpubReaderActivity
+            scenario.onActivity { activity = it }
+            last = withContext(Dispatchers.Main) { activity.evaluateReaderJavascript(script) }
+            if (accept(last)) return last
+            SystemClock.sleep(250)
+        }
+        return last
+    }
+
+    private fun pageBytes(color: Int): ByteArray = ByteArrayOutputStream().use { output ->
+        Bitmap.createBitmap(66, 100, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(color)
+            compress(Bitmap.CompressFormat.JPEG, 90, output)
+            recycle()
+        }
+        output.toByteArray()
+    }
+
+    private fun writeCbz(target: File, pageCount: Int) {
+        val colors = listOf(Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW, Color.CYAN, Color.MAGENTA, Color.GRAY)
+        ZipOutputStream(target.outputStream().buffered()).use { zip ->
+            repeat(pageCount) { index ->
+                zip.putNextEntry(ZipEntry(index.toString().padStart(4, '0') + ".jpg"))
+                zip.write(pageBytes(colors[index % colors.size]))
+                zip.closeEntry()
+            }
+        }
+    }
+
+    private fun writeEpub(target: File) {
+        ZipOutputStream(target.outputStream().buffered()).use { zip ->
+            val mimetype = "application/epub+zip".toByteArray()
+            zip.putNextEntry(
+                ZipEntry("mimetype").apply {
+                    method = ZipEntry.STORED
+                    size = mimetype.size.toLong()
+                    compressedSize = mimetype.size.toLong()
+                    crc = CRC32().apply { update(mimetype) }.value
+                }
+            )
+            zip.write(mimetype)
+            zip.closeEntry()
+            fun deflated(name: String, text: String) {
+                zip.putNextEntry(ZipEntry(name))
+                zip.write(text.trimIndent().toByteArray())
+                zip.closeEntry()
+            }
+            deflated(
+                "META-INF/container.xml",
+                """
+                <?xml version="1.0"?>
+                <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+                  <rootfiles>
+                    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+                  </rootfiles>
+                </container>
+                """
+            )
+            deflated(
+                "OEBPS/content.opf",
+                """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id">
+                  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                    <dc:identifier id="book-id">fold-oled-fixture</dc:identifier>
+                    <dc:title>Fold OLED Fixture</dc:title>
+                    <dc:language>en</dc:language>
+                    <meta property="dcterms:modified">2026-10-09T00:00:00Z</meta>
+                  </metadata>
+                  <manifest>
+                    <item id="chapter-1" href="Text/chapter-1.xhtml" media-type="application/xhtml+xml"/>
+                  </manifest>
+                  <spine><itemref idref="chapter-1"/></spine>
+                </package>
+                """
+            )
+            val text = "Fold and OLED reading content. ".repeat(400)
+            deflated(
+                "OEBPS/Text/chapter-1.xhtml",
+                """
+                <html xmlns="http://www.w3.org/1999/xhtml">
+                  <head><title>Chapter 1</title></head>
+                  <body>
+                    <h1>Chapter 1</h1>
+                    <p>Intro with <a id="link" href="https://example.invalid/">a link</a>.</p>
+                    <p>$text</p>
+                  </body>
+                </html>
+                """
+            )
+        }
+    }
+}
