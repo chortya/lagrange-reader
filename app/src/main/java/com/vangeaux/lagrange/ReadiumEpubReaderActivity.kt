@@ -86,7 +86,11 @@ import org.readium.r2.navigator.epub.EpubPreferences
 import org.readium.r2.navigator.input.InputListener
 import org.readium.r2.navigator.input.TapEvent
 import org.readium.r2.navigator.preferences.Color as ReadiumColor
+import org.readium.r2.navigator.epub.css.ColCount as ReadiumCssColCount
+import org.readium.r2.navigator.epub.css.Length as ReadiumCssLength
+import org.readium.r2.navigator.epub.css.RsProperties
 import org.readium.r2.navigator.preferences.ColumnCount
+import org.readium.r2.navigator.preferences.Spread
 import org.readium.r2.navigator.preferences.FontFamily as ReadiumFontFamily
 import org.readium.r2.navigator.preferences.Theme as ReadiumTheme
 import org.readium.r2.navigator.preferences.ReadingProgression as ReadiumReadingProgression
@@ -162,6 +166,42 @@ internal fun readiumFontFamily(fontFamily: EpubReaderFontFamily): ReadiumFontFam
     EpubReaderFontFamily.CUSTOM -> null
 }
 
+/** CSS px of Readium page gutter on each side of a spread column; the pages are 2x this apart. */
+internal const val EPUB_SPREAD_PAGE_GUTTER_CSS_PX = 24.0
+
+internal fun epubSpreadActive(twoPageSpread: Boolean, layoutMode: ReaderLayoutMode): Boolean =
+    twoPageSpread && layoutMode == ReaderLayoutMode.PAGINATED
+
+/**
+ * ReadiumCSS only honours a two-column request above a 60em viewport. Inline Readium CSS
+ * properties take precedence over that media query, so spreads also work on unfolded phones whose
+ * inner display is narrower than 960 CSS px. Column gap stays zero to keep Readium's
+ * viewport-width pagination exact; the gap between pages comes from the per-column page gutter.
+ */
+@OptIn(ExperimentalReadiumApi::class)
+internal fun epubSpreadRsProperties(twoPageSpread: Boolean): RsProperties = if (twoPageSpread) {
+    RsProperties(
+        colCount = ReadiumCssColCount.TWO,
+        pageGutter = ReadiumCssLength.Px(EPUB_SPREAD_PAGE_GUTTER_CSS_PX),
+        overrides = mapOf("--RS__colWidth" to "auto")
+    )
+} else {
+    RsProperties()
+}
+
+/** Left/right reader padding percentages; a spread uses their mean so the gutter stays centred. */
+internal fun epubHorizontalPaddingPercents(
+    left: Float,
+    right: Float,
+    twoPageSpread: Boolean
+): Pair<Float, Float> {
+    val safeLeft = left.coerceIn(0f, 100f)
+    val safeRight = right.coerceIn(0f, 100f)
+    if (!twoPageSpread) return safeLeft to safeRight
+    val mean = (safeLeft + safeRight) / 2f
+    return mean to mean
+}
+
 internal fun readiumEpubLineHeight(lineSpacing: Float): Double = lineSpacing
     .coerceIn(DEFAULT_EPUB_LINE_SPACING, MAX_EPUB_LINE_SPACING)
     .toDouble()
@@ -178,7 +218,8 @@ internal fun readiumPreferences(
     readingDirection: LibraryReadingDirection = LibraryReadingDirection.LEFT_TO_RIGHT,
     layoutMode: ReaderLayoutMode = ReaderLayoutMode.PAGINATED,
     fontFamily: EpubReaderFontFamily = EpubReaderFontFamily.PUBLISHER_DEFAULT,
-    wordSpacing: Float = DEFAULT_EPUB_WORD_SPACING
+    wordSpacing: Float = DEFAULT_EPUB_WORD_SPACING,
+    twoPageSpread: Boolean = false
 ): EpubPreferences = EpubPreferences(
     backgroundColor = ReadiumColor(theme.backgroundColor),
     textColor = ReadiumColor(cssHexColorInt(theme.foregroundCss)),
@@ -192,8 +233,11 @@ internal fun readiumPreferences(
     wordSpacing = readiumEpubWordSpacing(wordSpacing),
     fontFamily = readiumFontFamily(fontFamily),
     readingProgression = readiumEpubReadingProgression(readingDirection),
-    pageMargins = 0.0,
-    columnCount = ColumnCount.ONE,
+    // Spreads give each column its own Readium page gutter so the two pages never touch.
+    pageMargins = if (epubSpreadActive(twoPageSpread, layoutMode)) 1.0 else 0.0,
+    columnCount = if (epubSpreadActive(twoPageSpread, layoutMode)) ColumnCount.TWO else ColumnCount.ONE,
+    // Fixed-layout only. Readium 3.x treats Spread.AUTO as single page, so it must be explicit.
+    spread = if (epubSpreadActive(twoPageSpread, layoutMode)) Spread.ALWAYS else Spread.NEVER,
     scroll = layoutMode == ReaderLayoutMode.CONTINUOUS,
     // Readium only applies lineHeight and the other user CSS overrides when
     // publisher styles are disabled.
@@ -586,6 +630,9 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
     private var readingDirection by mutableStateOf(LibraryReadingDirection.LEFT_TO_RIGHT)
     private var epubLayoutMode by mutableStateOf(ReaderLayoutMode.PAGINATED)
     private var readerPreferences by mutableStateOf(LibraryReaderPreferences())
+    private val windowTracker by lazy { ReaderWindowTracker(this) }
+    // Fixed for the navigator's lifetime: Readium CSS properties are set at fragment creation.
+    private var twoPageSpreadActive = false
     private var showTapZoneTutorialAfterChanges by mutableStateOf(true)
     private var chapterTitles by mutableStateOf(emptyList<String>())
     private var currentChapter by mutableStateOf(0)
@@ -737,6 +784,12 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         appPreferencesStore.save(
             appPreferences.withReaderPreferences(libraryId, readerPreferences)
         )
+        twoPageSpreadActive = computeTwoPageSpread()
+        windowTracker.start()
+        lifecycleScope.launch {
+            windowTracker.spreadChanges { computeTwoPageSpread() }
+                .collect { recreateIfSpreadChanged() }
+        }
         configureSystemBars()
         createReaderViews()
         bindTtsService()
@@ -1154,10 +1207,12 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
                 readingDirection,
                 epubLayoutMode,
                 selectedFontFamily,
-                readerPreferences.wordSpacing
+                readerPreferences.wordSpacing,
+                twoPageSpreadActive
             ),
             paginationListener = paginationListener,
             configuration = EpubNavigatorFragment.Configuration(
+                readiumCssRsProperties = epubSpreadRsProperties(twoPageSpreadActive),
                 shouldApplyInsetsPadding = false,
                 selectionActionModeCallback = if (
                     epubAnnotationFeaturesEnabled(intent) ||
@@ -2627,7 +2682,8 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
                 normalized.readingDirection,
                 normalized.epubLayoutMode,
                 normalized.fontFamily,
-                normalized.wordSpacing
+                normalized.wordSpacing,
+                twoPageSpreadActive
             )
         )
         val current = appPreferencesStore.read()
@@ -2635,7 +2691,26 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
             current.withReaderPreferences(libraryId, normalized)
         )
         configureSystemBars()
+        if (recreateIfSpreadChanged()) return
         if (tapZoneChanged && showTapZoneTutorialAfterChanges) showTapZoneTutorial()
+    }
+
+    private fun computeTwoPageSpread(): Boolean = shouldUseTwoPageSpread(
+        mode = readerPreferences.twoPageSpread,
+        window = windowTracker.state.value,
+        layoutMode = epubLayoutMode
+    )
+
+    /**
+     * Window size changes already recreate this activity. Posture or preference changes that flip
+     * the spread decision recreate it too, reopening at the saved locator, because Readium CSS
+     * column properties cannot be changed on a live navigator.
+     */
+    private fun recreateIfSpreadChanged(): Boolean {
+        if (isFinishing || isDestroyed) return false
+        if (computeTwoPageSpread() == twoPageSpreadActive) return false
+        recreate()
+        return true
     }
 
     private fun updateShowTapZoneTutorialAfterChanges(enabled: Boolean) {
@@ -2658,10 +2733,15 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
             val topMargin = (viewOnlyBannerView.layoutParams as? FrameLayout.LayoutParams)?.topMargin ?: 0
             occupiedPreviewBannerBottom(topMargin, viewOnlyBannerView.height)
         } else 0
+        val (leftPercent, rightPercent) = epubHorizontalPaddingPercents(
+            padding.left,
+            padding.right,
+            epubSpreadActive(twoPageSpreadActive, epubLayoutMode)
+        )
         readerContainer.setPadding(
-            horizontal(padding.left),
+            horizontal(leftPercent),
             effectiveReaderTopSpace(normalTopPadding, occupiedBannerBottom, isPreview),
-            horizontal(padding.right),
+            horizontal(rightPercent),
             vertical(padding.bottom) + dpToPx(EPUB_READER_PROGRESS_FOOTER_HEIGHT_DP)
         )
     }
