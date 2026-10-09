@@ -197,6 +197,261 @@ class FoldSpreadOledActivityInstrumentedTest {
         }
     }
 
+    // ---- EPUB spread layout: margins, line spacing, reflow ----
+
+    /** Text geometry of the two pages on screen, in CSS px, measured inside the WebView. */
+    private data class SpreadLayout(
+        val viewportWidth: Double,
+        val leftOuter: Double,
+        val leftInner: Double,
+        val rightInner: Double,
+        val rightOuter: Double,
+        val leftLinePitch: Double,
+        val rightLinePitch: Double,
+        val leftLines: Int,
+        val rightLines: Int
+    )
+
+    private val spreadLayoutScript = """
+        (function() {
+          var vw = window.innerWidth, mid = vw / 2;
+          var onScreen = function(r) { return r.width > 0 && r.right > 0 && r.left < vw; };
+          var frags = [];
+          document.querySelectorAll('p').forEach(function(p) {
+            Array.prototype.forEach.call(p.getClientRects(), function(r) { if (onScreen(r)) frags.push(r); });
+          });
+          var side = function(a, left) { return a.filter(function(r) { return ((r.left + r.right) / 2 < mid) === left; }); };
+          var lo = function(a) { return Math.min.apply(null, a.map(function(r) { return r.left; })); };
+          var hi = function(a) { return Math.max.apply(null, a.map(function(r) { return r.right; })); };
+          var range = document.createRange();
+          range.selectNodeContents(document.querySelectorAll('p')[1]);
+          var lines = Array.prototype.filter.call(range.getClientRects(), onScreen);
+          var pitch = function(a) {
+            var tops = a.map(function(r) { return Math.round(r.top * 10) / 10; })
+              .filter(function(v, i, all) { return all.indexOf(v) === i; }).sort(function(x, y) { return x - y; });
+            var d = [];
+            for (var i = 1; i < tops.length; i++) d.push(tops[i] - tops[i - 1]);
+            d.sort(function(x, y) { return x - y; });
+            return [d.length ? d[Math.floor(d.length / 2)] : -1, tops.length];
+          };
+          var lf = side(frags, true), rf = side(frags, false);
+          var lp = pitch(side(lines, true)), rp = pitch(side(lines, false));
+          return [vw, lo(lf), mid - hi(lf), lo(rf) - mid, vw - hi(rf), lp[0], rp[0], lp[1], rp[1]].join(',');
+        })()
+    """.trimIndent()
+
+    private suspend fun measureSpread(scenario: ActivityScenario<ReadiumEpubReaderActivity>): SpreadLayout {
+        val raw = requireNotNull(
+            awaitJavascript(scenario, spreadLayoutScript) { it != null && it != "null" && !it.contains("Infinity") }
+        ) { "spread layout script returned nothing" }
+        val v = raw.trim('"').split(',').map { it.toDouble() }
+        return SpreadLayout(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7].toInt(), v[8].toInt())
+    }
+
+    /** Polls the layout until [accept] holds (Readium applies preferences asynchronously). */
+    private suspend fun awaitSpread(
+        scenario: ActivityScenario<ReadiumEpubReaderActivity>,
+        message: String,
+        accept: (SpreadLayout) -> Boolean
+    ): SpreadLayout {
+        var last: SpreadLayout? = null
+        repeat(40) {
+            last = measureSpread(scenario)
+            if (accept(last!!)) return last!!
+            SystemClock.sleep(250)
+        }
+        throw AssertionError("$message; last layout $last")
+    }
+
+    private fun assertMargins(layout: SpreadLayout, expected: Double) {
+        val tolerance = 2.0
+        listOf(
+            "left page outer" to layout.leftOuter,
+            "left page inner" to layout.leftInner,
+            "right page inner" to layout.rightInner,
+            "right page outer" to layout.rightOuter
+        ).forEach { (name, actual) ->
+            assertEquals("$name margin in $layout", expected, actual, tolerance)
+        }
+    }
+
+    private fun launchSpreadEpub(
+        profile: LibraryReaderPreferences,
+        block: suspend (ActivityScenario<ReadiumEpubReaderActivity>, Int) -> Unit
+    ) = runBlocking {
+        val epub = File(context.cacheDir, "fold-layout-${System.nanoTime()}.epub")
+        val readerKey = "fold-layout-epub-${System.nanoTime()}"
+        writeEpub(epub)
+        useProfile(profile)
+        try {
+            launchEpub(epub, readerKey).use { scenario ->
+                awaitEpubReady(scenario, readerKey)
+                var qualifies = false
+                var widthDp = 0
+                scenario.onActivity { activity ->
+                    qualifies = windowQualifiesForSpread(activity)
+                    widthDp = activity.resources.configuration.screenWidthDp
+                }
+                assumeTrue("Requires a large horizontal window (unfolded foldable or tablet)", qualifies)
+                block(scenario, widthDp)
+            }
+        } finally {
+            epub.delete()
+        }
+    }
+
+    @Test
+    fun epubSpreadMarginsAreEqualOnBothSidesOfBothPagesAndFollowTheMarginSetting() = launchSpreadEpub(
+        LibraryReaderPreferences(
+            twoPageSpread = ReaderSpreadMode.AUTO,
+            padding = EpubPaddingPercentages(left = 15f, right = 15f)
+        )
+    ) { scenario, widthDp ->
+        val narrow = epubSpreadPageMarginCssPx(widthDp, 15f, 15f)
+        val initial = awaitSpread(scenario, "both pages did not get the 15% margin") {
+            it.leftLines > 0 && it.rightLines > 0 && kotlin.math.abs(it.leftInner - narrow) < 2.0
+        }
+        // The WebView spans the whole window: the container adds no outer padding in a spread.
+        assertEquals(widthDp.toDouble(), initial.viewportWidth, 2.0)
+        assertMargins(initial, narrow)
+
+        // Widening the margins live widens all four page edges equally; no recreation needed.
+        scenario.onActivity { activity ->
+            activity.applyReaderPreferencesForTest {
+                it.copy(padding = it.padding.copy(left = 40f, right = 40f))
+            }
+        }
+        val wide = epubSpreadPageMarginCssPx(widthDp, 40f, 40f)
+        val widened = awaitSpread(scenario, "margins did not follow the 40% setting") {
+            kotlin.math.abs(it.leftOuter - wide) < 2.0 && kotlin.math.abs(it.rightOuter - wide) < 2.0
+        }
+        assertMargins(widened, wide)
+        assertTrue("text must reflow into both narrower pages", widened.leftLines > 0 && widened.rightLines > 0)
+        scenario.onActivity { activity -> assertTrue(activity.isTwoPageSpreadActive()) }
+
+        // Uneven left/right settings still give both pages symmetric margins (their mean).
+        scenario.onActivity { activity ->
+            activity.applyReaderPreferencesForTest {
+                it.copy(padding = it.padding.copy(left = 10f, right = 30f))
+            }
+        }
+        val mean = epubSpreadPageMarginCssPx(widthDp, 10f, 30f)
+        assertMargins(
+            awaitSpread(scenario, "uneven margins were not averaged") { kotlin.math.abs(it.leftOuter - mean) < 2.0 },
+            mean
+        )
+    }
+
+    @Test
+    fun epubSpreadLineSpacingAndFontSizeApplyEquallyToBothPages() = launchSpreadEpub(
+        LibraryReaderPreferences(twoPageSpread = ReaderSpreadMode.AUTO, lineSpacing = 1f, fontScale = 1f)
+    ) { scenario, widthDp ->
+        val base = awaitSpread(scenario, "both pages did not show text") {
+            it.leftLines > 2 && it.rightLines > 2
+        }
+        assertEquals("both pages share one line pitch", base.leftLinePitch, base.rightLinePitch, 0.5)
+        val margin = epubSpreadPageMarginCssPx(widthDp, EPUB_DEFAULT_PADDING_PERCENT, EPUB_DEFAULT_PADDING_PERCENT)
+
+        scenario.onActivity { activity ->
+            activity.applyReaderPreferencesForTest { it.copy(lineSpacing = 1.8f) }
+        }
+        val spaced = awaitSpread(scenario, "line spacing did not change") {
+            it.leftLinePitch > base.leftLinePitch * 1.3 && it.rightLines > 1
+        }
+        assertEquals("both pages share the new line pitch", spaced.leftLinePitch, spaced.rightLinePitch, 0.5)
+        assertTrue("wider spacing fits fewer lines on each page", spaced.leftLines < base.leftLines)
+        assertTrue(spaced.rightLines < base.rightLines)
+        assertMargins(spaced, margin)
+
+        scenario.onActivity { activity ->
+            activity.applyReaderPreferencesForTest { it.copy(fontScale = 1.6f) }
+        }
+        val larger = awaitSpread(scenario, "font size did not change") {
+            it.leftLinePitch > spaced.leftLinePitch * 1.3 && it.rightLines > 1
+        }
+        assertEquals("both pages share the reflowed line pitch", larger.leftLinePitch, larger.rightLinePitch, 0.5)
+        assertTrue(larger.leftLines < spaced.leftLines)
+        assertMargins(larger, margin)
+        scenario.onActivity { activity -> assertTrue(activity.isTwoPageSpreadActive()) }
+    }
+
+    // ---- Rotation ----
+
+    @Test
+    fun epubSpreadFallsBackToOneColumnWhenRotatedToPortrait(): Unit = runBlocking {
+        val epub = File(context.cacheDir, "fold-rotate-${System.nanoTime()}.epub")
+        val readerKey = "fold-rotate-epub-${System.nanoTime()}"
+        writeEpub(epub)
+        useProfile(LibraryReaderPreferences(twoPageSpread = ReaderSpreadMode.AUTO))
+        try {
+            launchEpub(epub, readerKey).use { scenario ->
+                awaitEpubReady(scenario, readerKey)
+                var qualifies = false
+                scenario.onActivity { activity -> qualifies = windowQualifiesForSpread(activity) }
+                assumeTrue("Requires a large horizontal window (unfolded foldable or tablet)", qualifies)
+                scenario.onActivity { activity -> assertTrue(activity.isTwoPageSpreadActive()) }
+
+                rotateToPortrait(scenario)
+                awaitCondition(scenario, "EPUB did not return to one column in portrait") { activity ->
+                    !activity.resources.configuration.let { it.screenWidthDp > it.screenHeightDp } &&
+                        !activity.isTwoPageSpreadActive()
+                }
+                awaitEpubReady(scenario, readerKey)
+                val columns = awaitJavascript(scenario, "getComputedStyle(document.documentElement).columnCount")
+                assertEquals("\"1\"", columns)
+            }
+        } finally {
+            epub.delete()
+        }
+    }
+
+    @Test
+    fun comicSpreadFallsBackToSinglePageWhenRotatedToPortrait() {
+        val cbz = File(context.cacheDir, "fold-rotate-${System.nanoTime()}.cbz")
+        val readerKey = "fold-rotate-comic-${System.nanoTime()}"
+        writeCbz(cbz, 7)
+        useProfile(LibraryReaderPreferences(twoPageSpread = ReaderSpreadMode.AUTO))
+        try {
+            ActivityScenario.launch<ReadiumComicReaderActivity>(
+                ReadiumComicReaderActivity.createIntent(
+                    context = context,
+                    file = cbz,
+                    title = "Fold rotate",
+                    readerKey = readerKey,
+                    libraryId = libraryId,
+                    launchMode = ReaderLaunchMode.NORMAL,
+                    initialPage = 4
+                )
+            ).use { scenario ->
+                var qualifies = false
+                awaitCondition(scenario, "comic reader did not settle") { activity ->
+                    qualifies = windowQualifiesForSpread(activity)
+                    activity.isComicSpreadReaderVisible() == qualifies
+                }
+                assumeTrue("Requires a large horizontal window (unfolded foldable or tablet)", qualifies)
+
+                rotateToPortrait(scenario)
+                awaitCondition(scenario, "comic did not return to the single-page navigator in portrait") { activity ->
+                    !activity.isComicSpreadReaderVisible() &&
+                        activity.supportFragmentManager.fragments.any { it.tag == "readium_comic_navigator" }
+                }
+                // Spread 4–5 resumes on its first page, so portrait reopens on page 4 (index 3).
+                val stored = requireNotNull(ReadiumComicLocatorStore(context).read(readerKey))
+                assertTrue(stored.href.toString().endsWith("0003.jpg"))
+            }
+        } finally {
+            cbz.delete()
+        }
+    }
+
+    /** Rotates like a user would; the lock is switched too so the recreated reader stays portrait. */
+    private fun <A : android.app.Activity> rotateToPortrait(scenario: ActivityScenario<A>) {
+        store.save(store.read().copy(lockedOrientation = LockedOrientation.PORTRAIT))
+        scenario.onActivity { activity ->
+            activity.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
+
     @Test
     fun oledEpubRendersPureWhiteOnPureBlackInPageAndWindow(): Unit = runBlocking {
         val epub = File(context.cacheDir, "oled-${System.nanoTime()}.epub")

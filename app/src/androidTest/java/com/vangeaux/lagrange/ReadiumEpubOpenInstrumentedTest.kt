@@ -476,9 +476,26 @@ class ReadiumEpubOpenInstrumentedTest {
         )
 
         assertEquals(ColumnCount.TWO, preferences.columnCount)
-        assertEquals(1.0, requireNotNull(preferences.pageMargins), 0.0)
+        assertEquals(EPUB_SPREAD_MIN_PAGE_MARGIN_CSS_PX, requireNotNull(preferences.pageMargins), 0.0)
         assertEquals(Spread.ALWAYS, preferences.spread)
         assertEquals(false, preferences.scroll)
+    }
+
+    @OptIn(ExperimentalReadiumApi::class)
+    @Test
+    fun spreadPreferencesCarryThePageMarginAndSinglePageKeepsNone() {
+        val spread = readiumPreferences(
+            EpubReaderTheme.Light, fontScale = 1f, twoPageSpread = true, spreadPageMarginCssPx = 40.0
+        )
+        assertEquals(40.0, requireNotNull(spread.pageMargins), 0.0)
+        val tooSmall = readiumPreferences(
+            EpubReaderTheme.Light, fontScale = 1f, twoPageSpread = true, spreadPageMarginCssPx = 2.0
+        )
+        assertEquals(EPUB_SPREAD_MIN_PAGE_MARGIN_CSS_PX, requireNotNull(tooSmall.pageMargins), 0.0)
+        val single = readiumPreferences(
+            EpubReaderTheme.Light, fontScale = 1f, twoPageSpread = false, spreadPageMarginCssPx = 40.0
+        )
+        assertEquals(0.0, requireNotNull(single.pageMargins), 0.0)
     }
 
     @OptIn(ExperimentalReadiumApi::class)
