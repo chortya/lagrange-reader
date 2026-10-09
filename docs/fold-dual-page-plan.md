@@ -170,7 +170,7 @@ If this is revisited, the path would be to reuse the Phase 3 spread pager throug
 |---|---|---|
 | 0 Setup | Done | Fork `chortya/lagrange-reader`. Baseline 837 JVM tests green. The 5 parser tests that fail on a non-English host locale are pre-existing; run Gradle with `JAVA_TOOL_OPTIONS="-Duser.language=en -Duser.country=US"`. Pixel Fold API 36 AVD used as the Fold8 stand-in. |
 | 1 Foundation | Done | `ReaderSpreadPolicy`, `ReaderWindowTracker` (`androidx.window` 1.5.1, compileSdk 35 unchanged), per-library preferences and options UI. |
-| 2 EPUB | Done | Readium reflowable `columnCount` / fixed-layout `spread`, plus `RsProperties` to bypass ReadiumCSS's 60em media query (found during implementation: the Fold8 window is under 960 CSS px), plus a per-column gutter. |
+| 2 EPUB | Done | Readium reflowable `columnCount` / fixed-layout `spread`, plus `RsProperties` to bypass ReadiumCSS's 60em media query (found during implementation: the Fold8 window is under 960 CSS px), plus per-page margins that follow the reader margin setting live (symmetric on both pages; verified on device for margins, line spacing and font size). Rotating to portrait falls back to one page (instrumented test). |
 | OLED | Done | Pure black/white page, chrome, sheets, dialogs, window and status bar. In-page white links and selection. Images untouched. |
 | 3 Comics | Done | `ComicSpreadReader` pager: cover alone, shift, wide pages shown alone, RTL, zoom, export, spread navigation, first-page resume / last-page progress. |
 | 4 PDF | Out of scope | — |
