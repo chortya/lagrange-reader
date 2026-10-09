@@ -73,7 +73,7 @@ internal fun shouldUseTwoPageSpread(
 - [ ] Create a GitHub fork (`chortya/lagrange-reader`), push the branch, and add `upstream` as a remote.
 - [ ] Run the baseline gates green: `./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`.
 - [ ] Set up AVDs: "7.6\" Fold-in with outer display", Pixel 9 Pro Fold, and "Resizable (Experimental)". Install the Samsung Galaxy emulator skin for the Fold8 aspect ratio.
-- [ ] Book a Remote Test Lab slot on Z Fold8 (SM-F971) for later phases if no physical device is available.
+- [x] ~~Book a Remote Test Lab slot on Z Fold8 (SM-F971)~~ Not needed: validated on a physical Fold8 (2026-10-09).
 
 ### Phase 1 — Foundation: policy, preference, window tracking (1–2 days)
 
@@ -174,4 +174,4 @@ If this is revisited, the path would be to reuse the Phase 3 spread pager throug
 | OLED | Done | Pure black/white page, chrome, sheets, dialogs, window and status bar. In-page white links and selection. Images untouched. |
 | 3 Comics | Done | `ComicSpreadReader` pager: cover alone, shift, wide pages shown alone, RTL, zoom, export, spread navigation, first-page resume / last-page progress. |
 | 4 PDF | Out of scope | — |
-| 5 Validation | Automated done; device pending | JVM 905 tests, lint clean, connected suite on Pixel Fold AVD. A physical Fold8 / Remote Test Lab pass is still required (see `docs/testing.md` → Foldable spreads and OLED EPUB). |
+| 5 Validation | Automated done; device validated | JVM 907 tests, lint clean; fold/spread/OLED connected tests (including rotate-to-portrait and on-screen measurement of EPUB spread margins, line spacing and font size) pass on a Pixel Fold API 36 AVD. Comic spreads meet at the fold with no gap on the AVD; the ~40px gap seen earlier did not reproduce. **2026-10-09: test build `fold-dual-page-test-20261009` (719b3de) checked on a physical Galaxy Z Fold8 by the owner and looks good.** Postures not yet explicitly confirmed on the device: half-open book/tabletop, split-screen, fold/unfold mid-chapter with TTS, RTL manga, orientation lock, Fold8 Ultra. |
