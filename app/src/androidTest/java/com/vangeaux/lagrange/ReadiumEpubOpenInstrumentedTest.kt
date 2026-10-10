@@ -483,6 +483,33 @@ class ReadiumEpubOpenInstrumentedTest {
 
     @OptIn(ExperimentalReadiumApi::class)
     @Test
+    fun typesettingPreferencesMapToReadiumAlignmentHyphensAndLanguage() {
+        val defaults = readiumPreferences(EpubReaderTheme.Light, fontScale = 1f)
+        assertEquals(org.readium.r2.navigator.preferences.TextAlign.START, defaults.textAlign)
+        assertEquals(false, defaults.hyphens)
+        assertEquals(null, defaults.language)
+
+        val justified = readiumPreferences(
+            EpubReaderTheme.Light,
+            fontScale = 1f,
+            textAlignment = EpubTextAlignment.JUSTIFY,
+            fallbackLanguage = "de-DE"
+        )
+        assertEquals(org.readium.r2.navigator.preferences.TextAlign.JUSTIFY, justified.textAlign)
+        assertEquals(true, justified.hyphens)
+        assertEquals("de-DE", justified.language?.code)
+
+        val forcedOff = readiumPreferences(
+            EpubReaderTheme.Light,
+            fontScale = 1f,
+            textAlignment = EpubTextAlignment.JUSTIFY,
+            hyphenation = EpubHyphenation.OFF
+        )
+        assertEquals(false, forcedOff.hyphens)
+    }
+
+    @OptIn(ExperimentalReadiumApi::class)
+    @Test
     fun spreadPreferencesCarryThePageMarginAndSinglePageKeepsNone() {
         val spread = readiumPreferences(
             EpubReaderTheme.Light, fontScale = 1f, twoPageSpread = true, spreadPageMarginCssPx = 40.0

@@ -78,7 +78,8 @@ On a Galaxy Z Fold8 (physical device or Samsung Remote Test Lab SM-F971):
   - Rotate to portrait, fold to the cover screen, open split-screen, and switch to continuous layout: each shows one column.
   - Margins: each page has the same margin on its outer and inner side, and the gap between the pages is twice that. Raising or lowering the left/right margin widens or narrows all four page edges at once, without reopening the book. Uneven left/right settings use their mean.
   - Line spacing, word spacing, font size and font family change both pages identically and reflow text across both columns.
-  - Automated: `FoldSpreadOledActivityInstrumentedTest` measures the four page margins, the line pitch on each page, and the rotate-to-portrait fallback.
+  - Text alignment and hyphenation: Left with Auto hyphenation (default) is ragged and unhyphenated. Justified hyphenates long words and gives flush lines on both pages. Hyphenation Off removes hyphens; Left with On hyphenates ragged text. Changes apply without reopening the book. A book whose metadata declares no language is hyphenated in the device language.
+  - Automated: `FoldSpreadOledActivityInstrumentedTest` measures the four page margins, the line pitch on each page, hyphenated words and flush lines on each page, the no-language fallback, and the rotate-to-portrait fallback. `EpubTypesettingPreferencesTest` (JVM) covers storage and the fallback rules.
   - Confirm the following still work: resume position after fold/unfold, TTS sentence highlighting and auto page-turn across columns, highlights spanning the column boundary, and tap zones.
 - **Comics:**
   - Unfolded, paginated CBZ/CBR shows the cover alone, then facing pairs.

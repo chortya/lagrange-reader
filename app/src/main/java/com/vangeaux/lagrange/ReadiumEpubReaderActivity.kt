@@ -59,6 +59,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import java.io.File
 import java.net.URI
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
@@ -91,6 +92,7 @@ import org.readium.r2.navigator.epub.css.Length as ReadiumCssLength
 import org.readium.r2.navigator.epub.css.RsProperties
 import org.readium.r2.navigator.preferences.ColumnCount
 import org.readium.r2.navigator.preferences.Spread
+import org.readium.r2.navigator.preferences.TextAlign as ReadiumTextAlign
 import org.readium.r2.navigator.preferences.FontFamily as ReadiumFontFamily
 import org.readium.r2.navigator.preferences.Theme as ReadiumTheme
 import org.readium.r2.navigator.preferences.ReadingProgression as ReadiumReadingProgression
@@ -100,6 +102,7 @@ import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.publication.services.positions
+import org.readium.r2.shared.util.Language as ReadiumLanguage
 import org.readium.r2.shared.util.asset.AssetRetriever
 import org.readium.r2.shared.util.http.DefaultHttpClient
 import org.readium.r2.shared.util.mediatype.MediaType
@@ -223,6 +226,29 @@ internal fun readiumEpubLineHeight(lineSpacing: Float): Double = lineSpacing
     .coerceIn(DEFAULT_EPUB_LINE_SPACING, MAX_EPUB_LINE_SPACING)
     .toDouble()
 
+internal fun readiumEpubTextAlign(alignment: EpubTextAlignment): ReadiumTextAlign = when (alignment) {
+    // START follows the text direction, so right-to-left books stay aligned to their own edge.
+    EpubTextAlignment.START -> ReadiumTextAlign.START
+    EpubTextAlignment.JUSTIFY -> ReadiumTextAlign.JUSTIFY
+}
+
+/** Base languages without system hyphenation patterns, or whose script changes Readium's layout (RTL, CJK). */
+private val EPUB_NON_HYPHENATING_LANGUAGES = setOf(
+    "ar", "he", "iw", "fa", "ur", "yi", "ji", "ps", "sd", "ckb", "dv", "ug", "zh", "ja", "ko"
+)
+
+/**
+ * The browser hyphenates only text whose language is known. Books that declare no language get the
+ * device language so hyphenation still works. It is applied only for languages that hyphenate,
+ * because Readium also derives vertical text and right-to-left layout from the content language.
+ */
+internal fun epubFallbackContentLanguage(publicationLanguages: List<String>, deviceLocale: Locale): String? {
+    if (publicationLanguages.any { it.isNotBlank() }) return null
+    val base = deviceLocale.language.lowercase(Locale.ROOT)
+    if (base.isBlank() || base == "und" || base in EPUB_NON_HYPHENATING_LANGUAGES) return null
+    return deviceLocale.toLanguageTag()
+}
+
 internal fun readiumEpubWordSpacing(wordSpacing: Float): Double = wordSpacing
     .coerceIn(DEFAULT_EPUB_WORD_SPACING, MAX_EPUB_WORD_SPACING)
     .toDouble()
@@ -237,7 +263,10 @@ internal fun readiumPreferences(
     fontFamily: EpubReaderFontFamily = EpubReaderFontFamily.PUBLISHER_DEFAULT,
     wordSpacing: Float = DEFAULT_EPUB_WORD_SPACING,
     twoPageSpread: Boolean = false,
-    spreadPageMarginCssPx: Double = EPUB_SPREAD_MIN_PAGE_MARGIN_CSS_PX
+    spreadPageMarginCssPx: Double = EPUB_SPREAD_MIN_PAGE_MARGIN_CSS_PX,
+    textAlignment: EpubTextAlignment = EpubTextAlignment.START,
+    hyphenation: EpubHyphenation = EpubHyphenation.AUTO,
+    fallbackLanguage: String? = null
 ): EpubPreferences = EpubPreferences(
     backgroundColor = ReadiumColor(theme.backgroundColor),
     textColor = ReadiumColor(cssHexColorInt(theme.foregroundCss)),
@@ -249,6 +278,9 @@ internal fun readiumPreferences(
     fontSize = fontScale.coerceIn(MIN_EPUB_FONT_SCALE, MAX_EPUB_FONT_SCALE).toDouble(),
     lineHeight = readiumEpubLineHeight(lineSpacing),
     wordSpacing = readiumEpubWordSpacing(wordSpacing),
+    textAlign = readiumEpubTextAlign(textAlignment),
+    hyphens = epubHyphenationActive(textAlignment, hyphenation),
+    language = fallbackLanguage?.let(::ReadiumLanguage),
     fontFamily = readiumFontFamily(fontFamily),
     readingProgression = readiumEpubReadingProgression(readingDirection),
     // Spreads give each column its own margin (in units of the 1px spread page gutter).
@@ -624,6 +656,7 @@ internal fun shouldLoadNextAnnotationPage(
 class ReadiumEpubReaderActivity : FragmentActivity() {
     private var publication: Publication? = null
     private var navigator: EpubNavigatorFragment? = null
+    private var fallbackContentLanguage: String? = null
     private var progressView: ProgressBar? = null
     private val readerContainerId: Int = R.id.readium_reader_container
     private lateinit var rootView: FrameLayout
@@ -1196,6 +1229,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
             return
         }
         publication = openedPublication
+        fallbackContentLanguage = epubFallbackContentLanguage(openedPublication.metadata.languages, Locale.getDefault())
         ttsAvailable = !isPreview && AndroidTtsNavigatorFactory(application, openedPublication) != null
         readingSessionReporter.start(
             intent.getFloatExtra(EXTRA_INITIAL_PERCENT, Float.NaN).takeUnless(Float::isNaN)
@@ -1229,7 +1263,10 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
                 selectedFontFamily,
                 readerPreferences.wordSpacing,
                 twoPageSpreadActive,
-                spreadPageMarginCssPx()
+                spreadPageMarginCssPx(),
+                readerPreferences.textAlignment,
+                readerPreferences.hyphenation,
+                fallbackContentLanguage
             ),
             paginationListener = paginationListener,
             configuration = EpubNavigatorFragment.Configuration(
@@ -2710,7 +2747,10 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
                 normalized.fontFamily,
                 normalized.wordSpacing,
                 twoPageSpreadActive,
-                spreadPageMarginCssPx()
+                spreadPageMarginCssPx(),
+                normalized.textAlignment,
+                normalized.hyphenation,
+                fallbackContentLanguage
             )
         )
         val current = appPreferencesStore.read()

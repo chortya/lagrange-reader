@@ -4608,6 +4608,43 @@ internal fun ReaderConfigurationControls(
                 modifier = Modifier.testTag("$testTagPrefix-word-spacing")
             )
         }
+        Text("Text alignment", style = MaterialTheme.typography.titleMedium)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            EpubTextAlignment.values().forEach { alignment ->
+                FilterChip(
+                    selected = value.textAlignment == alignment,
+                    onClick = { onPreferencesChange(value.copy(textAlignment = alignment)) },
+                    label = { Text(alignment.displayName) },
+                    modifier = Modifier.testTag("$testTagPrefix-text-align-${alignment.name.lowercase()}")
+                )
+            }
+        }
+        Text("Hyphenation", style = MaterialTheme.typography.titleMedium)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            EpubHyphenation.values().forEach { hyphenation ->
+                FilterChip(
+                    selected = value.hyphenation == hyphenation,
+                    onClick = { onPreferencesChange(value.copy(hyphenation = hyphenation)) },
+                    label = { Text(hyphenation.displayName) },
+                    modifier = Modifier.testTag("$testTagPrefix-hyphenation-${hyphenation.name.lowercase()}")
+                )
+            }
+        }
+        Text(
+            if (value.hyphenation == EpubHyphenation.AUTO) {
+                "Auto hyphenates justified text only. Uses the book's language, or the device language if the book declares none."
+            } else {
+                "Uses the book's language, or the device language if the book declares none."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
     if (format != ReaderConfigurationFormat.COMIC) {
         Row(
