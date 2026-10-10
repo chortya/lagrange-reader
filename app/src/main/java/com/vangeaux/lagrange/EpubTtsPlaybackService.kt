@@ -241,6 +241,7 @@ class EpubTtsPlaybackService : Service() {
             publish { it.copy(isPlaying = false) }
             updatePlaybackWakeLock(isPlaying = false)
             updateNotification(isPlayingOverride = false)
+            flushServerProgress()
         }
 
         fun previous(ownerToken: String? = null) {
@@ -612,10 +613,22 @@ class EpubTtsPlaybackService : Service() {
         }
     }
 
+    /**
+     * Sends the current read-aloud position past the progress throttle. Called on pause, so the
+     * last stretch of listening reaches the server even if the app is killed while paused.
+     */
+    private fun flushServerProgress() {
+        val spec = activeSpec ?: return
+        val openedPublication = publication ?: return
+        val locator = binder.state.value.locator ?: return
+        queueServerProgress(spec, openedPublication, locator, force = true)
+    }
+
     private fun queueServerProgress(
         spec: EpubTtsSessionSpec,
         openedPublication: Publication,
-        locator: Locator
+        locator: Locator,
+        force: Boolean = false
     ) {
         if (!isSpecCurrent(spec)) return
         val currentBookId = spec.bookId?.takeIf { it.isNotBlank() } ?: return
@@ -631,7 +644,7 @@ class EpubTtsPlaybackService : Service() {
             chapterCount = openedPublication.readingOrder.size
         )
         val now = System.currentTimeMillis()
-        if (!shouldQueueEpubTtsProgress(
+        if (!force && !shouldQueueEpubTtsProgress(
                 lastQueuedAtMillis = lastQueuedAtMillis,
                 lastQueuedPercent = lastQueuedPercent,
                 lastQueuedChapter = lastQueuedChapter,
