@@ -1,0 +1,127 @@
+package com.vangeaux.lagrange
+
+import android.content.Context
+import java.util.Locale
+
+/** Where the language used for hyphenation and read-aloud comes from. */
+internal enum class EpubContentLanguageSource { OVERRIDE, BOOK, DEVICE, NONE }
+
+internal data class EpubContentLanguage(val tag: String?, val source: EpubContentLanguageSource)
+
+/**
+ * Resolves the book's content language. A per-book override wins; otherwise the book's declared
+ * language, otherwise the device language when it is one that hyphenates (see
+ * [epubFallbackContentLanguage]). This mirrors what Readium does on its own when nothing is set.
+ */
+internal fun resolveEpubContentLanguage(
+    override: String?,
+    publicationLanguages: List<String>,
+    deviceLocale: Locale
+): EpubContentLanguage {
+    override?.trim()?.takeIf { it.isNotEmpty() }?.let {
+        return EpubContentLanguage(it, EpubContentLanguageSource.OVERRIDE)
+    }
+    publicationLanguages.firstOrNull { it.isNotBlank() }?.let {
+        return EpubContentLanguage(it.trim(), EpubContentLanguageSource.BOOK)
+    }
+    epubFallbackContentLanguage(publicationLanguages, deviceLocale)?.let {
+        return EpubContentLanguage(it, EpubContentLanguageSource.DEVICE)
+    }
+    return EpubContentLanguage(null, EpubContentLanguageSource.NONE)
+}
+
+/**
+ * Language to hand to the Readium EPUB navigator. A declared book language is left to Readium so
+ * per-element `xml:lang` keeps working; an override or the device fallback must be set explicitly.
+ */
+internal fun epubNavigatorLanguage(language: EpubContentLanguage): String? = when (language.source) {
+    EpubContentLanguageSource.OVERRIDE, EpubContentLanguageSource.DEVICE -> language.tag
+    EpubContentLanguageSource.BOOK, EpubContentLanguageSource.NONE -> null
+}
+
+/** Language to hand to the Readium TTS navigator: only an override; Auto keeps Readium's choice. */
+internal fun epubTtsLanguage(language: EpubContentLanguage): String? =
+    language.tag.takeIf { language.source == EpubContentLanguageSource.OVERRIDE }
+
+internal fun epubLanguageDisplayName(tag: String, displayLocale: Locale): String {
+    val locale = Locale.forLanguageTag(tag)
+    val name = locale.getDisplayName(displayLocale).takeIf { it.isNotBlank() && it != tag } ?: tag
+    return name.replaceFirstChar { if (it.isLowerCase()) it.titlecase(displayLocale) else it.toString() }
+}
+
+internal fun epubContentLanguageSummary(language: EpubContentLanguage, displayLocale: Locale): String {
+    val name = language.tag?.let { epubLanguageDisplayName(it, displayLocale) }
+    return when (language.source) {
+        EpubContentLanguageSource.OVERRIDE -> name.orEmpty()
+        EpubContentLanguageSource.BOOK -> "Auto · $name (from book)"
+        EpubContentLanguageSource.DEVICE -> "Auto · $name (device; book declares none)"
+        EpubContentLanguageSource.NONE -> "Auto · unknown (book declares none)"
+    }
+}
+
+internal data class EpubLanguageOption(val tag: String, val displayName: String)
+
+internal data class EpubBookLanguageChoice(
+    val resolved: EpubContentLanguage,
+    val summary: String,
+    val suggested: List<EpubLanguageOption>,
+    val all: List<EpubLanguageOption>
+)
+
+/**
+ * Suggested languages (the book's, the device's and English) followed by every base language the
+ * platform knows, by display name. Base tags only: voices are matched without region and the
+ * browser picks the regional hyphenation patterns itself.
+ */
+internal fun epubBookLanguageChoice(
+    override: String?,
+    publicationLanguages: List<String>,
+    deviceLocale: Locale,
+    availableLanguages: List<String> = Locale.getAvailableLocales().map { it.language }
+): EpubBookLanguageChoice {
+    fun option(tag: String) = EpubLanguageOption(tag, epubLanguageDisplayName(tag, deviceLocale))
+    val suggestedTags = (
+        publicationLanguages.map { Locale.forLanguageTag(it.trim()).language } +
+            deviceLocale.language +
+            "en"
+        )
+        .filter { it.isNotBlank() && it != "und" }
+        .distinct()
+    val all = availableLanguages
+        .filter { it.length in 2..3 && it != "und" }
+        .distinct()
+        .map(::option)
+        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.displayName })
+    return EpubBookLanguageChoice(
+        resolved = resolveEpubContentLanguage(override, publicationLanguages, deviceLocale),
+        summary = epubContentLanguageSummary(
+            resolveEpubContentLanguage(override, publicationLanguages, deviceLocale),
+            deviceLocale
+        ),
+        suggested = suggestedTags.map(::option),
+        all = all
+    )
+}
+
+/** Per-book language override, keyed like the reading position. Absent means Auto. */
+internal class EpubBookLanguageStore(context: Context) {
+    private val preferences = context.getSharedPreferences(
+        "readium_epub_book_languages",
+        Context.MODE_PRIVATE
+    )
+
+    fun read(readerKey: String): String? =
+        readerKey.takeIf { it.isNotBlank() }?.let { preferences.getString(it, null) }
+
+    fun save(readerKey: String, languageTag: String?) {
+        if (readerKey.isBlank()) return
+        val tag = languageTag?.trim()?.takeIf { it.isNotEmpty() }
+        preferences.edit().apply {
+            if (tag == null) remove(readerKey) else putString(readerKey, tag)
+        }.apply()
+    }
+
+    fun clear() {
+        preferences.edit().clear().apply()
+    }
+}

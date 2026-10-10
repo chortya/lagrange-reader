@@ -274,6 +274,42 @@ class EpubReaderOptionsOverlayInstrumentedTest {
     }
 
     @Test
+    fun bookLanguagePickerShowsTheResolvedLanguageAndReportsChoices() {
+        val override = mutableStateOf<String?>(null)
+        val changes = mutableListOf<String?>()
+        composeRule.setContent {
+            EpubReaderOptionsBottomSheet(
+                title = "Language test",
+                status = "Chapter 1/1 · Page 1/1",
+                preferences = LibraryReaderPreferences(),
+                onContinueReading = {},
+                onCloseBook = {},
+                onPreferencesChange = {},
+                bookLanguage = epubBookLanguageChoice(
+                    override = override.value,
+                    publicationLanguages = listOf("nl"),
+                    deviceLocale = java.util.Locale.US,
+                    availableLanguages = listOf("nl", "en", "de", "fr")
+                ),
+                onBookLanguageChange = {
+                    changes += it
+                    override.value = it
+                }
+            )
+        }
+
+        composeRule.onNodeWithText("Book language: Auto · Dutch (from book)").assertIsDisplayed()
+        composeRule.onNodeWithTag("reader-options-book-language-dropdown").performClick()
+        composeRule.onNodeWithTag("reader-options-book-language-en").performClick()
+        composeRule.onNodeWithText("Book language: English").assertIsDisplayed()
+        composeRule.onNodeWithTag("reader-options-book-language-dropdown").performClick()
+        composeRule.onNodeWithTag("reader-options-book-language-auto").performClick()
+
+        composeRule.runOnIdle { assertEquals(listOf("en", null), changes) }
+        composeRule.onNodeWithText("Book language: Auto · Dutch (from book)").assertIsDisplayed()
+    }
+
+    @Test
     fun readerConfigurationEditsPreserveAllFormatLayoutsAndGaps() {
         val profile = mutableStateOf(
             LibraryReaderPreferences(

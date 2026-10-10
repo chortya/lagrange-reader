@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -763,6 +764,9 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
     private var stoppedSinceLastStart = false
     private var foregroundSyncTimeoutJob: Job? = null
     private var fallbackContentLanguage: String? = null
+    private var publicationLanguages: List<String> = emptyList()
+    private var bookLanguageOverride by mutableStateOf<String?>(null)
+    private val bookLanguageStore by lazy { EpubBookLanguageStore(this) }
     private var progressView: ProgressBar? = null
     private val readerContainerId: Int = R.id.readium_reader_container
     private lateinit var rootView: FrameLayout
@@ -945,6 +949,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
             stored = ttsPositionStore.read(readerKey)
         )
         lastTtsLocator = restoredTtsLocator ?: ttsPositionStore.read(readerKey)
+        bookLanguageOverride = bookLanguageStore.read(readerKey)
         bookId = epubAnnotationBookId(intent)
         readingSessionReporter = ViewModelProvider(this)[ReadingSessionReporterViewModel::class.java].reporter(
             context = this,
@@ -1183,6 +1188,8 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
                             onShowTapZoneTutorialAfterChangesChange = ::updateShowTapZoneTutorialAfterChanges,
                             onCustomFontRequest = ::chooseCustomFont,
                             onCustomFontRemove = ::removeCustomFont,
+                            bookLanguage = remember(bookLanguageOverride, publication) { bookLanguageChoice() },
+                            onBookLanguageChange = ::setBookLanguage,
                             modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                         )
                     }
@@ -1357,7 +1364,8 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
             return
         }
         publication = openedPublication
-        fallbackContentLanguage = epubFallbackContentLanguage(openedPublication.metadata.languages, Locale.getDefault())
+        publicationLanguages = openedPublication.metadata.languages
+        fallbackContentLanguage = epubNavigatorLanguage(currentContentLanguage())
         ttsAvailable = !isPreview && AndroidTtsNavigatorFactory(application, openedPublication) != null
         chapterTitles = openedPublication.readingOrder.mapIndexed { index, link ->
             chapterTitle(openedPublication.tableOfContents, link) ?: link.title ?: "Chapter ${index + 1}"
@@ -1607,6 +1615,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
                     initialLocator = initialLocator,
                     selectionText = selectionText,
                     settings = ttsSettings,
+                    languageTag = epubTtsLanguage(currentContentLanguage()),
                     playWhenReady = playWhenReady
                 )
                 if (ttsStartRequestId != requestId ||
@@ -3024,6 +3033,28 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         return appPreferencesStore.read().libraryReaderPreferences[library]?.theme
             ?: themeStore.read()
     }
+
+    private fun currentContentLanguage(): EpubContentLanguage =
+        resolveEpubContentLanguage(bookLanguageOverride, publicationLanguages, Locale.getDefault())
+
+    private fun bookLanguageChoice(): EpubBookLanguageChoice? =
+        publication?.let {
+            epubBookLanguageChoice(bookLanguageOverride, publicationLanguages, Locale.getDefault())
+        }
+
+    /** Sets or clears (null = Auto) this book's language for hyphenation and read-aloud. */
+    private fun setBookLanguage(languageTag: String?) {
+        val normalized = languageTag?.trim()?.takeIf { it.isNotEmpty() }
+        if (normalized == bookLanguageOverride) return
+        bookLanguageOverride = normalized
+        if (!isPreview) bookLanguageStore.save(readerKey, normalized)
+        val language = currentContentLanguage()
+        fallbackContentLanguage = epubNavigatorLanguage(language)
+        ttsServiceBinder?.setLanguage(ttsOwnerToken, epubTtsLanguage(language))
+        applyReaderPreferences(readerPreferences)
+    }
+
+    internal fun setBookLanguageForTest(languageTag: String?) = setBookLanguage(languageTag)
 
     private fun updateShowTapZoneTutorialAfterChanges(enabled: Boolean) {
         showTapZoneTutorialAfterChanges = enabled
