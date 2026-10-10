@@ -643,6 +643,7 @@ internal fun shouldLoadNextAnnotationPage(
 class ReadiumEpubReaderActivity : FragmentActivity() {
     private var publication: Publication? = null
     private var navigator: EpubNavigatorFragment? = null
+    private var lastRecordedVisualLocator: Locator? = null
     private var progressView: ProgressBar? = null
     private val readerContainerId: Int = R.id.readium_reader_container
     private lateinit var rootView: FrameLayout
@@ -789,7 +790,6 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         mediaOverlayPlayback = ViewModelProvider(this)[EpubMediaOverlayPlaybackViewModel::class.java]
         mediaOverlayPlaylist = mediaOverlayPlayback.playableClips.map { it.clip }
-        restoredLocator = savedInstanceState?.readReaderLocator()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         AppPreferencesStore(this).read().let { preferences ->
             requestedOrientation = requestedOrientationForLock(
@@ -805,14 +805,21 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
                 intent.putExtra(EXTRA_TTS_OWNER_TOKEN, it)
             }
         libraryId = intent.getStringExtra(EXTRA_LIBRARY_ID).orEmpty()
-        restoredTtsLocator = savedInstanceState?.readEpubTtsLocator()
-        lastTtsLocator = restoredTtsLocator ?: ttsPositionStore.read(readerKey)
         // The restored reader opens where the server progress put it; the narration position it
         // replaced must still be dropped once the reader is shown again and the service connects.
         if (savedInstanceState?.getBoolean(STATE_STALE_NARRATION_CLEANUP_PENDING) == true) {
             staleNarrationPositionCleanup.serverProgressWon()
         }
         isPreview = intent.getBooleanExtra(EXTRA_IS_PREVIEW, false)
+        restoredLocator = epubRestoredLocator(
+            savedState = savedInstanceState?.readReaderLocator(),
+            stored = if (isPreview) null else locatorStore.read(readerKey)
+        )
+        restoredTtsLocator = epubRestoredLocator(
+            savedState = savedInstanceState?.readEpubTtsLocator(),
+            stored = ttsPositionStore.read(readerKey)
+        )
+        lastTtsLocator = restoredTtsLocator ?: ttsPositionStore.read(readerKey)
         bookId = epubAnnotationBookId(intent)
         readingSessionReporter = ViewModelProvider(this)[ReadingSessionReporterViewModel::class.java].reporter(
             context = this,
@@ -1239,7 +1246,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
             override fun onPageChanged(pageIndex: Int, totalPages: Int, locator: Locator) {
                 currentPage = pageIndex.coerceAtLeast(0)
                 currentPageCount = totalPages.coerceAtLeast(1)
-                updateLocation(locator)
+                recordVisualLocator(locator)
             }
         }
         val navigatorFactory = EpubNavigatorFactory(openedPublication)
@@ -1294,7 +1301,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 fragment.currentLocator.collect { locator ->
-                    updateLocation(locator)
+                    recordVisualLocator(locator)
                     pendingAnnotationReanchor?.let { target ->
                         pendingAnnotationReanchor = null
                         if (locator != target) fragment.go(target)
@@ -2691,6 +2698,26 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         )
     }
 
+    /**
+     * Records a position reported by the visual navigator. Returning to the foreground replays the
+     * last visual position (the locator flow re-collects and the WebView re-paginates), while
+     * background read-aloud may have saved a newer one since. Real moves are always recorded; a
+     * re-report of the same place (possibly enriched with book positions) is recorded only while
+     * the stored position is still the one this reader wrote.
+     */
+    private fun recordVisualLocator(locator: Locator) {
+        val last = lastRecordedVisualLocator
+        if (!shouldRecordVisualLocator(last, locator)) {
+            if (last == null || locator == last) return
+            val storedElsewhere = !isPreview && last.let { mine ->
+                locatorStore.readJson(readerKey) != mine.toJSON().toString()
+            }
+            if (storedElsewhere) return
+        }
+        lastRecordedVisualLocator = locator
+        updateLocation(locator)
+    }
+
     private fun updateLocation(locator: Locator) {
         val openedPublication = publication ?: return
         val chapterIndex = openedPublication.readingOrder.indexOfFirst { link ->
@@ -3165,6 +3192,30 @@ internal fun closeEpubReaderPlayback(
     closeTtsPlayback()
 }
 
+/**
+ * A visual position is recorded only when the reader actually moved: a different resource or a
+ * different progression within it. Readium re-reports the same place on resume, sometimes enriched
+ * with `position`/`totalProgression` once positions are computed; that is not a move.
+ */
+internal fun shouldRecordVisualLocator(lastRecorded: Locator?, current: Locator): Boolean {
+    val last = lastRecorded ?: return true
+    if (last.href.removeFragment().toString() != current.href.removeFragment().toString()) return true
+    val lastProgression = last.locations.progression
+    val currentProgression = current.locations.progression
+    if (lastProgression == null || currentProgression == null) return lastProgression != currentProgression
+    return kotlin.math.abs(lastProgression - currentProgression) > 1e-6
+}
+
+/**
+ * Position to restore when Android rebuilds the reader from saved instance state. The stores are
+ * written on every position change, including by background read-aloud after the saved state was
+ * captured, so a stored position is never older than the saved state and wins. The saved state is
+ * only a fallback (for example in preview, which never writes the store). Without saved state this
+ * is a fresh launch, which resolves its position from the intent and the store itself.
+ */
+internal fun epubRestoredLocator(savedState: Locator?, stored: Locator?): Locator? =
+    savedState?.let { stored ?: it }
+
 internal class ReadiumEpubLocatorStore(context: Context) {
     private val preferences = context.getSharedPreferences(
         "readium_epub_locations",
@@ -3176,6 +3227,9 @@ internal class ReadiumEpubLocatorStore(context: Context) {
         val json = preferences.getString(readerKey, null) ?: return null
         return runCatching { Locator.fromJSON(JSONObject(json)) }.getOrNull()
     }
+
+    fun readJson(readerKey: String): String? =
+        readerKey.takeIf { it.isNotBlank() }?.let { preferences.getString(it, null) }
 
     fun save(readerKey: String, locator: Locator) {
         if (readerKey.isBlank()) return
