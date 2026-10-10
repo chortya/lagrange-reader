@@ -1501,11 +1501,16 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         startJob.start()
     }
 
+    /**
+     * Follows a read-aloud session that is still running for this reader after recreation. The
+     * saved read-aloud position ([restoredTtsLocator]) is not followed: without a live session it
+     * is only where listening last stopped, and jumping there would pull the reader back from where
+     * it has read since. It stays available as the "Keep listening" start point.
+     */
     private fun restoreTtsPositionAfterRecreation(openedPublication: Publication) {
         val locator = ttsServiceBinder?.state?.value
-            ?.takeIf { it.ownerToken == ttsOwnerToken && it.readerKey == readerKey }
+            ?.takeIf { it.ownerToken == ttsOwnerToken && it.readerKey == readerKey && it.hasSession }
             ?.locator
-            ?: restoredTtsLocator
         restoredTtsLocator = null
         locator?.takeIf { candidate ->
             openedPublication.readingOrder.any { link ->

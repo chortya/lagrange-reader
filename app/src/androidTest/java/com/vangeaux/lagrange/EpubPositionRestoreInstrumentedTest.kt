@@ -132,6 +132,81 @@ class EpubPositionRestoreInstrumentedTest {
     }
 
     @Test
+    fun anOldReadAloudPositionDoesNotPullTheReaderBackWhenItIsRebuilt() {
+        val chapter1 = "OEBPS/Text/chapter-1.xhtml"
+        val chapter3 = "OEBPS/Text/chapter-3.xhtml"
+        fun locator(href: String, progression: Double, total: Double) = requireNotNull(
+            Locator.fromJSON(
+                JSONObject(
+                    """{"href":"$href","type":"application/xhtml+xml",
+                       "locations":{"progression":$progression,"totalProgression":$total}}"""
+                )
+            )
+        )
+        // Read-aloud was used early in the book and paused; the reader then read on to chapter 3.
+        ReadiumEpubTtsPositionStore(context).save(readerKey, locator(chapter1, 0.4, 0.13))
+        ReadiumEpubLocatorStore(context).save(readerKey, locator(chapter3, 0.5, 0.83))
+
+        val written = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val positions = context.getSharedPreferences("readium_epub_locations", android.content.Context.MODE_PRIVATE)
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key == readerKey) prefs.getString(key, null)?.let(written::add)
+        }
+        launch().use { scenario ->
+            awaitStoredHref("reader did not open on chapter 3") { it.endsWith("chapter-3.xhtml") }
+            positions.registerOnSharedPreferenceChangeListener(listener)
+            // Android rebuilds the reader (rotation, fold, or reopening after process death).
+            scenario.moveToState(Lifecycle.State.CREATED)
+            scenario.recreate()
+            scenario.moveToState(Lifecycle.State.RESUMED)
+            // Record every position written while the rebuilt reader settles: a jump back to the old
+            // read-aloud position can be overwritten again moments later, so a final check alone
+            // would miss it.
+            SystemClock.sleep(4000)
+            scenario.onActivity { }
+            assertTrue(
+                "reader jumped to the old read-aloud position; positions written: $written",
+                written.none { it.contains("chapter-1.xhtml") }
+            )
+            val stored = requireNotNull(ReadiumEpubLocatorStore(context).read(readerKey))
+            assertTrue(stored.href.toString().endsWith("chapter-3.xhtml"))
+        }
+        positions.unregisterOnSharedPreferenceChangeListener(listener)
+    }
+
+    private fun locatorJson(json: String): Locator = requireNotNull(Locator.fromJSON(JSONObject(json)))
+
+    @Test
+    fun visualPositionsAreRecordedOnlyWhenTheReaderMoves() {
+        val start = locatorJson("""{"href":"a.xhtml","type":"application/xhtml+xml","locations":{"progression":0.25}}""")
+        val enriched = locatorJson(
+            """{"href":"a.xhtml#p3","type":"application/xhtml+xml","locations":{"progression":0.25,"position":4,"totalProgression":0.1}}"""
+        )
+        val later = locatorJson("""{"href":"a.xhtml","type":"application/xhtml+xml","locations":{"progression":0.5}}""")
+        val otherChapter = locatorJson("""{"href":"b.xhtml","type":"application/xhtml+xml","locations":{"progression":0.25}}""")
+        val noProgression = locatorJson("""{"href":"a.xhtml","type":"application/xhtml+xml","locations":{}}""")
+
+        assertTrue(shouldRecordVisualLocator(null, start))
+        assertTrue(!shouldRecordVisualLocator(start, start))
+        assertTrue("same place re-reported with book positions is not a move", !shouldRecordVisualLocator(start, enriched))
+        assertTrue(shouldRecordVisualLocator(start, later))
+        assertTrue(shouldRecordVisualLocator(start, otherChapter))
+        assertTrue(shouldRecordVisualLocator(start, noProgression))
+        assertTrue(!shouldRecordVisualLocator(noProgression, noProgression))
+    }
+
+    @Test
+    fun savedStateRestoreUsesTheStoredPositionAndFallsBackToSavedState() {
+        val saved = locatorJson("""{"href":"a.xhtml","type":"application/xhtml+xml","locations":{"progression":0.1}}""")
+        val stored = locatorJson("""{"href":"c.xhtml","type":"application/xhtml+xml","locations":{"progression":0.5}}""")
+
+        assertEquals(stored, epubRestoredLocator(savedState = saved, stored = stored))
+        assertEquals(saved, epubRestoredLocator(savedState = saved, stored = null))
+        // A fresh launch has no saved state and resolves its position from the intent and store.
+        assertEquals(null, epubRestoredLocator(savedState = null, stored = stored))
+    }
+
+    @Test
     fun configurationRecreationStillRestoresTheCurrentPosition() {
         launch().use { scenario ->
             val opened = awaitStoredHref("reader did not open") { it.endsWith("chapter-1.xhtml") }
