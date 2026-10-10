@@ -132,6 +132,37 @@ class EpubPositionRestoreInstrumentedTest {
     }
 
     @Test
+    fun anOldReadAloudPositionDoesNotPullTheReaderBackWhenItIsRebuilt() {
+        val chapter1 = "OEBPS/Text/chapter-1.xhtml"
+        val chapter3 = "OEBPS/Text/chapter-3.xhtml"
+        fun locator(href: String, progression: Double, total: Double) = requireNotNull(
+            Locator.fromJSON(
+                JSONObject(
+                    """{"href":"$href","type":"application/xhtml+xml",
+                       "locations":{"progression":$progression,"totalProgression":$total}}"""
+                )
+            )
+        )
+        // Read-aloud was used early in the book and paused; the reader then read on to chapter 3.
+        ReadiumEpubTtsPositionStore(context).save(readerKey, locator(chapter1, 0.4, 0.13))
+        ReadiumEpubLocatorStore(context).save(readerKey, locator(chapter3, 0.5, 0.83))
+
+        launch().use { scenario ->
+            awaitStoredHref("reader did not open on chapter 3") { it.endsWith("chapter-3.xhtml") }
+            // Android rebuilds the reader (rotation, fold, or reopening after process death).
+            scenario.moveToState(Lifecycle.State.CREATED)
+            scenario.recreate()
+            scenario.moveToState(Lifecycle.State.RESUMED)
+            SystemClock.sleep(3000)
+            val stored = requireNotNull(ReadiumEpubLocatorStore(context).read(readerKey))
+            assertTrue(
+                "reader jumped to the old read-aloud position: ${stored.href}",
+                stored.href.toString().endsWith("chapter-3.xhtml")
+            )
+        }
+    }
+
+    @Test
     fun configurationRecreationStillRestoresTheCurrentPosition() {
         launch().use { scenario ->
             val opened = awaitStoredHref("reader did not open") { it.endsWith("chapter-1.xhtml") }
