@@ -277,11 +277,12 @@ class FoldSpreadOledActivityInstrumentedTest {
 
     private fun launchSpreadEpub(
         profile: LibraryReaderPreferences,
+        fixture: (File) -> Unit = { writeEpub(it) },
         block: suspend (ActivityScenario<ReadiumEpubReaderActivity>, Int) -> Unit
     ) = runBlocking {
         val epub = File(context.cacheDir, "fold-layout-${System.nanoTime()}.epub")
         val readerKey = "fold-layout-epub-${System.nanoTime()}"
-        writeEpub(epub)
+        fixture(epub)
         useProfile(profile)
         try {
             launchEpub(epub, readerKey).use { scenario ->
@@ -373,6 +374,146 @@ class FoldSpreadOledActivityInstrumentedTest {
         assertTrue(larger.leftLines < spaced.leftLines)
         assertMargins(larger, margin)
         scenario.onActivity { activity -> assertTrue(activity.isTwoPageSpreadActive()) }
+    }
+
+    // ---- EPUB spread typesetting: alignment and hyphenation ----
+
+    /** Hyphenation and justification on each spread page, measured inside the WebView. */
+    private data class SpreadTypesetting(
+        val align: String,
+        val hyphens: String,
+        val contentLanguage: String,
+        val leftSplitWords: Int,
+        val rightSplitWords: Int,
+        val leftFlushRatio: Double,
+        val rightFlushRatio: Double
+    )
+
+    private val typesettingScript = """
+        (function() {
+          var vw = window.innerWidth, mid = vw / 2;
+          var p = document.querySelectorAll('p')[1], cs = getComputedStyle(p);
+          var onScreen = function(r) { return r.width > 0 && r.right > 0 && r.left < vw; };
+          var split = [0, 0];
+          var walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT), node;
+          while ((node = walker.nextNode())) {
+            var re = /[A-Za-z]{9,}/g, m;
+            while ((m = re.exec(node.data))) {
+              var r = document.createRange(); r.setStart(node, m.index); r.setEnd(node, m.index + m[0].length);
+              var rects = Array.prototype.filter.call(r.getClientRects(), onScreen);
+              if (!rects.length) continue;
+              var tops = rects.map(function(x) { return Math.round(x.top); })
+                .filter(function(v, i, a) { return a.indexOf(v) === i; });
+              if (tops.length > 1) split[(rects[0].left + rects[0].right) / 2 < mid ? 0 : 1]++;
+            }
+          }
+          // Share of full lines whose right edge is flush with the column edge (justified text).
+          var whole = document.createRange(); whole.selectNodeContents(p);
+          var lines = {};
+          Array.prototype.forEach.call(whole.getClientRects(), function(x) {
+            if (!onScreen(x)) return;
+            var key = ((x.left + x.right) / 2 < mid ? 'L' : 'R') + Math.round(x.top);
+            lines[key] = Math.max(lines[key] || 0, x.right);
+          });
+          var flush = function(side) {
+            var rights = Object.keys(lines).filter(function(k) { return k[0] === side; })
+              .map(function(k) { return lines[k]; });
+            if (rights.length < 3) return -1;
+            var edge = Math.max.apply(null, rights);
+            return rights.filter(function(v) { return edge - v < 1.5; }).length / rights.length;
+          };
+          var html = document.documentElement;
+          var lang = html.getAttribute('lang') || html.getAttribute('xml:lang') || '';
+          return [cs.textAlign, cs.hyphens, lang, split[0], split[1], flush('L'), flush('R')].join('|');
+        })()
+    """.trimIndent()
+
+    private suspend fun awaitTypesetting(
+        scenario: ActivityScenario<ReadiumEpubReaderActivity>,
+        message: String,
+        accept: (SpreadTypesetting) -> Boolean
+    ): SpreadTypesetting {
+        var last: SpreadTypesetting? = null
+        repeat(40) {
+            val raw = awaitJavascript(scenario, typesettingScript)
+            if (raw != null && raw != "null") {
+                val v = raw.trim('"').split('|')
+                last = SpreadTypesetting(
+                    v[0], v[1], v[2], v[3].toInt(), v[4].toInt(), v[5].toDouble(), v[6].toDouble()
+                )
+                if (accept(last!!)) return last!!
+            }
+            SystemClock.sleep(250)
+        }
+        throw AssertionError("$message; last typesetting $last")
+    }
+
+    private val longWordParagraph =
+        ("Referred to the embryo's troublesome tendency to anaemia, the extraordinarily " +
+            "uncharacteristically incomprehensible institutionalization of representatives, " +
+            "simultaneously shaken into familiarity with movement and enumerated precautions. ").repeat(60)
+
+    @Test
+    fun epubSpreadAlignmentAndHyphenationApplyToBothPagesLive() = launchSpreadEpub(
+        LibraryReaderPreferences(twoPageSpread = ReaderSpreadMode.AUTO),
+        fixture = { writeEpub(it, language = "en", paragraph = longWordParagraph) }
+    ) { scenario, _ ->
+        // Default: left aligned, Auto hyphenation, so nothing is hyphenated (unchanged behaviour).
+        val defaults = awaitTypesetting(scenario, "default typesetting not applied") {
+            it.align == "start" && it.leftFlushRatio >= 0 && it.rightFlushRatio >= 0
+        }
+        assertEquals(0, defaults.leftSplitWords)
+        assertEquals(0, defaults.rightSplitWords)
+        assertEquals("en", defaults.contentLanguage)
+
+        // Justified + Auto: both pages justify and hyphenate.
+        scenario.onActivity { activity ->
+            activity.applyReaderPreferencesForTest { it.copy(textAlignment = EpubTextAlignment.JUSTIFY) }
+        }
+        val justified = awaitTypesetting(scenario, "justified text was not hyphenated on both pages") {
+            it.align == "justify" && it.leftSplitWords > 0 && it.rightSplitWords > 0
+        }
+        assertEquals("auto", justified.hyphens)
+        assertTrue("left page lines are flush: $justified", justified.leftFlushRatio > 0.8)
+        assertTrue("right page lines are flush: $justified", justified.rightFlushRatio > 0.8)
+        assertTrue("left-aligned text is ragged: $defaults", defaults.leftFlushRatio < justified.leftFlushRatio)
+
+        // Justified + Off: no hyphenation.
+        scenario.onActivity { activity ->
+            activity.applyReaderPreferencesForTest { it.copy(hyphenation = EpubHyphenation.OFF) }
+        }
+        val unhyphenated = awaitTypesetting(scenario, "hyphenation did not turn off") {
+            it.align == "justify" && it.leftSplitWords == 0 && it.rightSplitWords == 0
+        }
+        // ReadiumCSS writes `none`; either way the browser must not hyphenate.
+        assertTrue(unhyphenated.hyphens != "auto")
+
+        // Left + On: ragged right but hyphenated.
+        scenario.onActivity { activity ->
+            activity.applyReaderPreferencesForTest {
+                it.copy(textAlignment = EpubTextAlignment.START, hyphenation = EpubHyphenation.ON)
+            }
+        }
+        awaitTypesetting(scenario, "left-aligned text was not hyphenated on both pages") {
+            it.align == "start" && it.leftSplitWords > 0 && it.rightSplitWords > 0
+        }
+        scenario.onActivity { activity -> assertTrue(activity.isTwoPageSpreadActive()) }
+    }
+
+    @Test
+    fun epubWithoutDeclaredLanguageHyphenatesWithTheDeviceLanguage() = launchSpreadEpub(
+        LibraryReaderPreferences(
+            twoPageSpread = ReaderSpreadMode.AUTO,
+            textAlignment = EpubTextAlignment.JUSTIFY
+        ),
+        fixture = { writeEpub(it, language = null, paragraph = longWordParagraph) }
+    ) { scenario, _ ->
+        val expected = epubFallbackContentLanguage(emptyList(), java.util.Locale.getDefault())
+        assumeTrue("Device language must be one that hyphenates", expected != null)
+        val typeset = awaitTypesetting(scenario, "book without a language was not hyphenated") {
+            it.align == "justify" && it.leftSplitWords > 0 && it.rightSplitWords > 0
+        }
+        assertEquals(expected, typeset.contentLanguage)
     }
 
     // ---- Rotation ----
@@ -580,7 +721,11 @@ class FoldSpreadOledActivityInstrumentedTest {
         }
     }
 
-    private fun writeEpub(target: File) {
+    private fun writeEpub(
+        target: File,
+        language: String? = "en",
+        paragraph: String = "Fold and OLED reading content. ".repeat(400)
+    ) {
         ZipOutputStream(target.outputStream().buffered()).use { zip ->
             val mimetype = "application/epub+zip".toByteArray()
             zip.putNextEntry(
@@ -617,7 +762,7 @@ class FoldSpreadOledActivityInstrumentedTest {
                   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
                     <dc:identifier id="book-id">fold-oled-fixture</dc:identifier>
                     <dc:title>Fold OLED Fixture</dc:title>
-                    <dc:language>en</dc:language>
+                    ${language?.let { "<dc:language>$it</dc:language>" }.orEmpty()}
                     <meta property="dcterms:modified">2026-10-09T00:00:00Z</meta>
                   </metadata>
                   <manifest>
@@ -627,7 +772,7 @@ class FoldSpreadOledActivityInstrumentedTest {
                 </package>
                 """
             )
-            val text = "Fold and OLED reading content. ".repeat(400)
+            val text = paragraph
             deflated(
                 "OEBPS/Text/chapter-1.xhtml",
                 """

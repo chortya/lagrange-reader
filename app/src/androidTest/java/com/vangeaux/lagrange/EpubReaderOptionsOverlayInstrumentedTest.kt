@@ -173,6 +173,8 @@ class EpubReaderOptionsOverlayInstrumentedTest {
             .assertIsDisplayed()
         composeRule.onAllNodesWithText("Fonts").assertCountEquals(0)
         composeRule.onAllNodesWithText("Accessibility fonts").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Text alignment").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Hyphenation").assertCountEquals(0)
     }
 
     @Test
@@ -225,6 +227,48 @@ class EpubReaderOptionsOverlayInstrumentedTest {
             assertTrue(profile.value.wordSpacing > 0.2f)
             assertEquals(LibraryReadingDirection.RIGHT_TO_LEFT, profile.value.readingDirection)
             assertEquals(ReaderLayoutMode.CONTINUOUS, profile.value.epubLayoutMode)
+            assertEquals(EpubPaddingPercentages(11f, 22f, 33f, 44f), profile.value.padding)
+        }
+    }
+
+    @Test
+    fun epubAlignmentAndHyphenationChoicesUpdateOnlyTheirSettings() {
+        val profile = mutableStateOf(
+            LibraryReaderPreferences(
+                theme = EpubReaderTheme.OledBlack,
+                fontScale = 1.3f,
+                lineSpacing = 1.4f,
+                padding = EpubPaddingPercentages(11f, 22f, 33f, 44f)
+            )
+        )
+        composeRule.setContent {
+            EpubReaderOptionsBottomSheet(
+                title = "Typesetting test",
+                status = "Chapter 1/1 · Page 1/1",
+                preferences = profile.value,
+                onContinueReading = {},
+                onCloseBook = {},
+                onPreferencesChange = { profile.value = it }
+            )
+        }
+
+        composeRule.onNodeWithText("Text alignment").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Auto hyphenates justified text only", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("reader-options-reading-text-align-justify").performScrollTo().performClick()
+        composeRule.runOnIdle {
+            assertEquals(EpubTextAlignment.JUSTIFY, profile.value.textAlignment)
+            assertEquals(EpubHyphenation.AUTO, profile.value.hyphenation)
+        }
+        composeRule.onNodeWithTag("reader-options-reading-hyphenation-off").performScrollTo().performClick()
+
+        composeRule.runOnIdle {
+            assertEquals(EpubTextAlignment.JUSTIFY, profile.value.textAlignment)
+            assertEquals(EpubHyphenation.OFF, profile.value.hyphenation)
+            assertEquals(EpubReaderTheme.OledBlack, profile.value.theme)
+            assertEquals(1.3f, profile.value.fontScale)
+            assertEquals(1.4f, profile.value.lineSpacing)
             assertEquals(EpubPaddingPercentages(11f, 22f, 33f, 44f), profile.value.padding)
         }
     }
