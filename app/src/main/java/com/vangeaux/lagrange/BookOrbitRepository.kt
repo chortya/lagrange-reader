@@ -712,6 +712,7 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
         epubReaderPositionStore.clear()
         ReadiumEpubLocatorStore(context).clear()
         ReadiumEpubTtsPositionStore(context).clear()
+        EpubBookLanguageStore(context).clear()
         clearCookies()
     }
 
