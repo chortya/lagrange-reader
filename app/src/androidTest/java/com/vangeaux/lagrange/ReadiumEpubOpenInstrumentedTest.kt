@@ -596,6 +596,33 @@ class ReadiumEpubOpenInstrumentedTest {
         assertEquals(preferences(false), preferences(true))
     }
 
+    @OptIn(ExperimentalReadiumApi::class)
+    @Test
+    fun typesettingPreferencesMapToReadiumAlignmentHyphensAndLanguage() {
+        val defaults = readiumPreferences(EpubReaderTheme.Light, fontScale = 1f)
+        assertEquals(org.readium.r2.navigator.preferences.TextAlign.START, defaults.textAlign)
+        assertEquals(false, defaults.hyphens)
+        assertEquals(null, defaults.language)
+
+        val justified = readiumPreferences(
+            EpubReaderTheme.Light,
+            fontScale = 1f,
+            textAlignment = EpubTextAlignment.JUSTIFY,
+            fallbackLanguage = "de-DE"
+        )
+        assertEquals(org.readium.r2.navigator.preferences.TextAlign.JUSTIFY, justified.textAlign)
+        assertEquals(true, justified.hyphens)
+        assertEquals("de-DE", justified.language?.code)
+
+        val forcedOff = readiumPreferences(
+            EpubReaderTheme.Light,
+            fontScale = 1f,
+            textAlignment = EpubTextAlignment.JUSTIFY,
+            hyphenation = EpubHyphenation.OFF
+        )
+        assertEquals(false, forcedOff.hyphens)
+    }
+
     @Test
     fun injectsCustomFontIntoAReaderCopyWithoutChangingTheSource() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()

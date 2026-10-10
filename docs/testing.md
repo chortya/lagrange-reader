@@ -91,6 +91,16 @@ Automated coverage: `EpubOledThemeTest` (JVM); `EpubOledWebViewInstrumentedTest`
 - Switching into or out of OLED reopens the reader at the same position.
 - PDF and comics are unaffected.
 
+### EPUB text alignment and hyphenation
+
+Automated coverage: `EpubTypesettingPreferencesTest` (JVM); `EpubTypesettingActivityInstrumentedTest`, `ReadiumEpubOpenInstrumentedTest`, `EpubReaderOptionsOverlayInstrumentedTest` (connected).
+
+- Left with Auto hyphenation (the default) is ragged and unhyphenated, as before.
+- Justified hyphenates long words and gives flush lines.
+- Hyphenation Off removes hyphens; Left with On hyphenates ragged text.
+- Changes apply without reopening the book, from the reader options and from the library reader settings.
+- A book whose metadata declares no language is hyphenated in the device language.
+
 ### EPUB Image Library
 
 For a downloaded EPUB, verify the EPUB-only Image Library action, document-order image listing, duplicate suppression, SVG exclusion, minimum-size filtering, thumbnail navigation, bounded zoom/pan, outside-tap and Back dismissal, and original-image export. For an online EPUB, consent must start the normal durable selected-file download; the gallery opens only after download success. Offline missing content must report unavailable without a consent prompt.
