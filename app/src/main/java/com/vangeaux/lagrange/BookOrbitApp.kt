@@ -1780,6 +1780,8 @@ internal fun EpubReaderOptionsBottomSheet(
     onShowTapZoneTutorialAfterChangesChange: (Boolean) -> Unit = {},
     onCustomFontRequest: () -> Unit = {},
     onCustomFontRemove: () -> Unit = {},
+    bookLanguage: EpubBookLanguageChoice? = null,
+    onBookLanguageChange: (String?) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val parentTypography = MaterialTheme.typography
@@ -1920,6 +1922,10 @@ internal fun EpubReaderOptionsBottomSheet(
                                 Text("Close book")
                             }
                         }
+                        if (bookLanguage != null) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+                            EpubBookLanguageSettings(bookLanguage, onBookLanguageChange)
+                        }
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
                         Text("Reading configuration", style = MaterialTheme.typography.titleMedium)
                         ReaderConfigurationControls(
@@ -1933,6 +1939,61 @@ internal fun EpubReaderOptionsBottomSheet(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpubBookLanguageSettings(
+    choice: EpubBookLanguageChoice,
+    onChange: (String?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val isOverride = choice.resolved.source == EpubContentLanguageSource.OVERRIDE
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("This book", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Language for read-aloud voices and hyphenation",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Box {
+            OutlinedButton(
+                onClick = { expanded = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("reader-options-book-language-dropdown")
+            ) {
+                Text(
+                    "Book language: ${choice.summary}",
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuItem(
+                    text = { Text(if (isOverride) "Auto (book, else device language)" else "✓ ${choice.summary}") },
+                    onClick = {
+                        expanded = false
+                        onChange(null)
+                    },
+                    modifier = Modifier.testTag("reader-options-book-language-auto")
+                )
+                HorizontalDivider()
+                fun selected(tag: String) = isOverride && choice.resolved.tag == tag
+                (choice.suggested + choice.all.filterNot { option -> choice.suggested.any { it.tag == option.tag } })
+                    .forEachIndexed { index, option ->
+                        if (index == choice.suggested.size) HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(if (selected(option.tag)) "✓ ${option.displayName}" else option.displayName) },
+                            onClick = {
+                                expanded = false
+                                onChange(option.tag)
+                            },
+                            modifier = Modifier.testTag("reader-options-book-language-${option.tag}")
+                        )
+                    }
             }
         }
     }
