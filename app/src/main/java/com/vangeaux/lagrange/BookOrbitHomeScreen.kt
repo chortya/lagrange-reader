@@ -4282,6 +4282,15 @@ private fun LibraryReaderConfiguration(
                     )
                 }
             )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Text("Unfolded screens", style = MaterialTheme.typography.titleMedium)
+            ReaderSpreadSettings(
+                value = value,
+                layoutMode = ReaderLayoutMode.PAGINATED,
+                testTagPrefix = "options-reading",
+                showComicOptions = true,
+                onPreferencesChange = { next -> onPreferencesChange(selectedLibrary.id, next) }
+            )
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
@@ -4599,6 +4608,43 @@ internal fun ReaderConfigurationControls(
                 modifier = Modifier.testTag("$testTagPrefix-word-spacing")
             )
         }
+        Text("Text alignment", style = MaterialTheme.typography.titleMedium)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            EpubTextAlignment.values().forEach { alignment ->
+                FilterChip(
+                    selected = value.textAlignment == alignment,
+                    onClick = { onPreferencesChange(value.copy(textAlignment = alignment)) },
+                    label = { Text(alignment.displayName) },
+                    modifier = Modifier.testTag("$testTagPrefix-text-align-${alignment.name.lowercase()}")
+                )
+            }
+        }
+        Text("Hyphenation", style = MaterialTheme.typography.titleMedium)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            EpubHyphenation.values().forEach { hyphenation ->
+                FilterChip(
+                    selected = value.hyphenation == hyphenation,
+                    onClick = { onPreferencesChange(value.copy(hyphenation = hyphenation)) },
+                    label = { Text(hyphenation.displayName) },
+                    modifier = Modifier.testTag("$testTagPrefix-hyphenation-${hyphenation.name.lowercase()}")
+                )
+            }
+        }
+        Text(
+            if (value.hyphenation == EpubHyphenation.AUTO) {
+                "Auto hyphenates justified text only. Uses the book's language, or the device language if the book declares none."
+            } else {
+                "Uses the book's language, or the device language if the book declares none."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
     if (format != ReaderConfigurationFormat.COMIC) {
         Row(
@@ -4629,6 +4675,13 @@ internal fun ReaderConfigurationControls(
                 layoutMode = value.epubLayoutMode,
                 testTagPrefix = "$testTagPrefix-epub",
                 onLayoutModeChange = { onPreferencesChange(value.copy(epubLayoutMode = it)) }
+            )
+            ReaderSpreadSettings(
+                value = value,
+                layoutMode = value.epubLayoutMode,
+                testTagPrefix = "$testTagPrefix-epub",
+                showComicOptions = false,
+                onPreferencesChange = onPreferencesChange
             )
             Text("Page margins", style = MaterialTheme.typography.titleMedium)
             listOf(
@@ -4669,13 +4722,70 @@ internal fun ReaderConfigurationControls(
             invertColors = value.invertPdfColors,
             onInvertColorsChange = { onPreferencesChange(value.copy(invertPdfColors = it)) }
         )
-        ReaderConfigurationFormat.COMIC -> ReaderFormatLayoutSettings(
-            formatLabel = "CBR/CBZ",
-            layoutMode = value.comicLayoutMode,
-            pageGapDp = value.comicPageGapDp,
-            testTagPrefix = "$testTagPrefix-comic",
-            onLayoutModeChange = { onPreferencesChange(value.copy(comicLayoutMode = it)) },
-            onPageGapChange = { onPreferencesChange(value.copy(comicPageGapDp = it)) }
+        ReaderConfigurationFormat.COMIC -> {
+            ReaderFormatLayoutSettings(
+                formatLabel = "CBR/CBZ",
+                layoutMode = value.comicLayoutMode,
+                pageGapDp = value.comicPageGapDp,
+                testTagPrefix = "$testTagPrefix-comic",
+                onLayoutModeChange = { onPreferencesChange(value.copy(comicLayoutMode = it)) },
+                onPageGapChange = { onPreferencesChange(value.copy(comicPageGapDp = it)) }
+            )
+            ReaderSpreadSettings(
+                value = value,
+                layoutMode = value.comicLayoutMode,
+                testTagPrefix = "$testTagPrefix-comic",
+                showComicOptions = true,
+                onPreferencesChange = onPreferencesChange
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReaderSpreadSettings(
+    value: LibraryReaderPreferences,
+    layoutMode: ReaderLayoutMode,
+    testTagPrefix: String,
+    showComicOptions: Boolean,
+    onPreferencesChange: (LibraryReaderPreferences) -> Unit
+) {
+    val spreadEnabled = value.twoPageSpread == ReaderSpreadMode.AUTO
+    AppPreferenceSwitchRow(
+        title = "Two-page spread when unfolded",
+        summary = if (layoutMode == ReaderLayoutMode.PAGINATED) {
+            "On a large screen held horizontally, show two pages side by side"
+        } else {
+            "Applies to paginated layout on a large screen held horizontally"
+        },
+        checked = spreadEnabled,
+        testTag = "$testTagPrefix-two-page-spread",
+        onCheckedChange = { enabled ->
+            onPreferencesChange(
+                value.copy(twoPageSpread = if (enabled) ReaderSpreadMode.AUTO else ReaderSpreadMode.OFF)
+            )
+        }
+    )
+    if (showComicOptions) {
+        AppPreferenceSwitchRow(
+            title = "Show cover alone",
+            summary = "Keep the first page by itself so later pages pair like a printed book",
+            checked = value.comicSpreadCoverAlone,
+            enabled = spreadEnabled,
+            testTag = "$testTagPrefix-spread-cover-alone",
+            onCheckedChange = { enabled ->
+                onPreferencesChange(value.copy(comicSpreadCoverAlone = enabled))
+            }
+        )
+        AppPreferenceSwitchRow(
+            title = "Shift page pairs",
+            summary = "Move pairs by one page when two-page artwork is split across spreads",
+            checked = value.comicSpreadShift,
+            enabled = spreadEnabled,
+            testTag = "$testTagPrefix-spread-shift",
+            onCheckedChange = { enabled ->
+                onPreferencesChange(value.copy(comicSpreadShift = enabled))
+            }
         )
     }
 }

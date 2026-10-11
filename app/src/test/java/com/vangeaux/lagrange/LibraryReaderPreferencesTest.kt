@@ -135,6 +135,46 @@ class LibraryReaderPreferencesTest {
     }
 
     @Test
+    fun `spread preferences round trip through storage`() {
+        val profile = LibraryReaderPreferences(
+            twoPageSpread = ReaderSpreadMode.OFF,
+            comicSpreadCoverAlone = false,
+            comicSpreadShift = true
+        )
+
+        val decoded = libraryReaderPreferencesFromStorage(
+            libraryReaderPreferencesStorageValue(mapOf("manga" to profile))
+        ).getValue("manga")
+
+        assertEquals(profile, decoded)
+        assertEquals(ReaderSpreadMode.OFF, decoded.twoPageSpread)
+        assertFalse(decoded.comicSpreadCoverAlone)
+        assertTrue(decoded.comicSpreadShift)
+    }
+
+    @Test
+    fun `legacy profiles without spread keys default to automatic spreads with cover alone`() {
+        val decoded = libraryReaderPreferencesFromStorage(
+            """{"version":2,"profiles":{"library":{"theme":"oled_black"}}}"""
+        ).getValue("library")
+
+        assertEquals(ReaderSpreadMode.AUTO, decoded.twoPageSpread)
+        assertTrue(decoded.comicSpreadCoverAlone)
+        assertFalse(decoded.comicSpreadShift)
+        assertEquals(EpubReaderTheme.OledBlack, decoded.theme)
+    }
+
+    @Test
+    fun `unknown spread mode value falls back to automatic without dropping the profile`() {
+        val decoded = libraryReaderPreferencesFromStorage(
+            """{"version":2,"profiles":{"library":{"twoPageSpread":"sideways","comicSpreadShift":true}}}"""
+        ).getValue("library")
+
+        assertEquals(ReaderSpreadMode.AUTO, decoded.twoPageSpread)
+        assertTrue(decoded.comicSpreadShift)
+    }
+
+    @Test
     fun `global navigation bar policy applies uniformly to supported readers`() {
         assertTrue(AppPreferences().hideNavigationBarWhileReading)
         assertFalse(AppPreferences().hideStatusBarWhileReading)

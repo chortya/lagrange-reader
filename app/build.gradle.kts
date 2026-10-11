@@ -143,6 +143,7 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     implementation("androidx.webkit:webkit:1.11.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("androidx.window:window:1.5.1")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
     implementation("androidx.media3:media3-session:1.4.1")
@@ -167,5 +168,6 @@ dependencies {
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.window:window-testing:1.5.1")
     androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

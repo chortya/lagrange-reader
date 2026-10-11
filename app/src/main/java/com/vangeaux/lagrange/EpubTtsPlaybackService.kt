@@ -91,6 +91,8 @@ internal data class EpubTtsSessionSpec(
     val initialLocator: Locator?,
     val selectionText: String? = null,
     val settings: EpubTtsSettings,
+    /** Per-book language override for voices; null keeps Readium's book/device language. */
+    val languageTag: String? = null,
     val playWhenReady: Boolean
 )
 
@@ -241,6 +243,7 @@ class EpubTtsPlaybackService : Service() {
             publish { it.copy(isPlaying = false) }
             updatePlaybackWakeLock(isPlaying = false)
             updateNotification(isPlayingOverride = false)
+            flushServerProgress()
         }
 
         fun previous(ownerToken: String? = null) {
@@ -265,6 +268,26 @@ class EpubTtsPlaybackService : Service() {
             updateNotification()
         }
 
+        /** Switches the voice language of the running session (per-book override; null = Auto). */
+        fun setLanguage(ownerToken: String?, languageTag: String?) {
+            if (!isOwner(ownerToken)) return
+            val spec = activeSpec ?: return
+            if (spec.languageTag == languageTag) return
+            activeSpec = spec.copy(languageTag = languageTag)
+            val settings = mutableState.value.settings
+            navigator?.submitPreferences(
+                AndroidTtsPreferences(
+                    language = languageTag?.let(::Language),
+                    pitch = settings.pitch.toDouble(),
+                    speed = settings.speed.toDouble(),
+                    voices = settings.voiceIds.mapKeys { (language, _) -> Language(language) }
+                        .mapValues { (_, voiceId) -> AndroidTtsEngine.Voice.Id(voiceId) }
+                )
+            )
+            publishNavigatorCapabilities()
+            updateNotification()
+        }
+
         fun setSettings(value: EpubTtsSettings, ownerToken: String? = null) {
             if (!isOwner(ownerToken)) return
             val normalized = value.normalized()
@@ -273,6 +296,7 @@ class EpubTtsPlaybackService : Service() {
             activeSpec = activeSpec?.copy(settings = normalized)
             navigator?.submitPreferences(
                 AndroidTtsPreferences(
+                    language = activeSpec?.languageTag?.let(::Language),
                     pitch = normalized.pitch.toDouble(),
                     speed = normalized.speed.toDouble(),
                     voices = normalized.voiceIds.mapKeys { (language, _) -> Language(language) }
@@ -484,6 +508,7 @@ class EpubTtsPlaybackService : Service() {
                 },
                 initialLocator = spec.initialLocator,
                 initialPreferences = AndroidTtsPreferences(
+                    language = spec.languageTag?.let(::Language),
                     pitch = spec.settings.normalized().pitch.toDouble(),
                     speed = spec.settings.normalized().speed.toDouble(),
                     voices = spec.settings.normalized().voiceIds
@@ -612,10 +637,22 @@ class EpubTtsPlaybackService : Service() {
         }
     }
 
+    /**
+     * Sends the current read-aloud position past the progress throttle. Called on pause, so the
+     * last stretch of listening reaches the server even if the app is killed while paused.
+     */
+    private fun flushServerProgress() {
+        val spec = activeSpec ?: return
+        val openedPublication = publication ?: return
+        val locator = binder.state.value.locator ?: return
+        queueServerProgress(spec, openedPublication, locator, force = true)
+    }
+
     private fun queueServerProgress(
         spec: EpubTtsSessionSpec,
         openedPublication: Publication,
-        locator: Locator
+        locator: Locator,
+        force: Boolean = false
     ) {
         if (!isSpecCurrent(spec)) return
         val currentBookId = spec.bookId?.takeIf { it.isNotBlank() } ?: return
@@ -631,7 +668,7 @@ class EpubTtsPlaybackService : Service() {
             chapterCount = openedPublication.readingOrder.size
         )
         val now = System.currentTimeMillis()
-        if (!shouldQueueEpubTtsProgress(
+        if (!force && !shouldQueueEpubTtsProgress(
                 lastQueuedAtMillis = lastQueuedAtMillis,
                 lastQueuedPercent = lastQueuedPercent,
                 lastQueuedChapter = lastQueuedChapter,
