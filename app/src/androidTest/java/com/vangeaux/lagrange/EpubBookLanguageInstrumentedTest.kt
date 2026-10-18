@@ -209,7 +209,42 @@ class EpubBookLanguageInstrumentedTest {
         }
     }
 
-    private fun writeEpub(target: File, language: String) {
+    @Test
+    fun overrideReplacesALanguageDeclaredInTheChapterAndAutoRestoresIt() = runBlocking {
+        // Readium leaves a chapter's own lang/xml:lang alone; the override must still win.
+        writeEpub(epub, language = "nl", documentLanguage = "nl")
+        launch().use { scenario ->
+            awaitPageLanguage(scenario, "nl")
+            scenario.onActivity { it.setBookLanguageForTest("en") }
+            awaitPageLanguage(scenario, "en")
+            assertEquals("en", awaitBodyXmlLanguage(scenario, "en"))
+
+            scenario.onActivity { it.setBookLanguageForTest(null) }
+            awaitPageLanguage(scenario, "nl")
+            assertEquals("nl", awaitBodyXmlLanguage(scenario, "nl"))
+        }
+    }
+
+    private suspend fun awaitBodyXmlLanguage(
+        scenario: ActivityScenario<ReadiumEpubReaderActivity>,
+        expected: String
+    ): String? {
+        lateinit var activity: ReadiumEpubReaderActivity
+        scenario.onActivity { activity = it }
+        var last: String? = null
+        repeat(40) {
+            last = withContext(Dispatchers.Main) {
+                activity.evaluateReaderJavascript(
+                    "document.body.getAttributeNS('http://www.w3.org/XML/1998/namespace','lang')"
+                )
+            }?.trim('"')
+            if (last == expected) return last
+            delay(250L)
+        }
+        return last
+    }
+
+    private fun writeEpub(target: File, language: String, documentLanguage: String? = null) {
         ZipOutputStream(target.outputStream().buffered()).use { zip ->
             val mimetype = "application/epub+zip".toByteArray()
             zip.putNextEntry(
@@ -256,12 +291,14 @@ class EpubBookLanguageInstrumentedTest {
                 </package>
                 """
             )
+            val documentLanguageAttributes =
+                documentLanguage?.let { " lang=\"$it\" xml:lang=\"$it\"" }.orEmpty()
             deflated(
                 "OEBPS/Text/chapter-1.xhtml",
                 """
-                <html xmlns="http://www.w3.org/1999/xhtml">
+                <html xmlns="http://www.w3.org/1999/xhtml"$documentLanguageAttributes>
                   <head><title>Chapter 1</title></head>
-                  <body><h1>Chapter 1</h1><p>${"The Director told them everything about the hatchery. ".repeat(80)}</p></body>
+                  <body$documentLanguageAttributes><h1>Chapter 1</h1><p>${"The Director told them everything about the hatchery. ".repeat(80)}</p></body>
                 </html>
                 """
             )

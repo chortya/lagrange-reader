@@ -490,13 +490,13 @@ internal fun epubCurrentDocumentInstallScript(
 }
 
 internal suspend fun runEpubCurrentDocumentBridgeLoop(
-    installScript: String,
+    installScript: () -> String,
     evaluateJavascript: suspend (String) -> String?,
     onGesture: (String) -> Unit,
     pollIntervalMillis: Long = 250L
 ) {
     while (currentCoroutineContext().isActive) {
-        runCatching { evaluateJavascript(installScript) }
+        runCatching { evaluateJavascript(installScript()) }
         val event = runCatching {
             evaluateJavascript(EPUB_IMAGE_GESTURE_PROBE_SCRIPT)
                 ?.let(::decodeJavascriptString)
@@ -2228,7 +2228,9 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         epubImageGestureJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 runEpubCurrentDocumentBridgeLoop(
-                    installScript = installScript,
+                    installScript = {
+                        installScript + "\n" + epubDocumentLanguageScript(bookLanguageOverride)
+                    },
                     evaluateJavascript = fragment::evaluateJavascript,
                     onGesture = { event -> handleEpubImageGesture(fragment, event) }
                 )

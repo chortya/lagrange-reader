@@ -2,6 +2,7 @@ package com.vangeaux.lagrange
 
 import android.content.Context
 import java.util.Locale
+import org.json.JSONObject
 
 /** Where the language used for hyphenation and read-aloud comes from. */
 internal enum class EpubContentLanguageSource { OVERRIDE, BOOK, DEVICE, NONE }
@@ -37,6 +38,40 @@ internal fun resolveEpubContentLanguage(
 internal fun epubNavigatorLanguage(language: EpubContentLanguage): String? = when (language.source) {
     EpubContentLanguageSource.OVERRIDE, EpubContentLanguageSource.DEVICE -> language.tag
     EpubContentLanguageSource.BOOK, EpubContentLanguageSource.NONE -> null
+}
+
+/**
+ * Readium only injects its `language` into documents whose `<html>` declares none, so a per-book
+ * override would not reach chapters that carry their own `lang`/`xml:lang`. This script, run on the
+ * current document, sets the override on `<html>` and `<body>` and restores the publisher's values
+ * once the override is cleared (Auto). Elements below `<body>` keep their own language.
+ */
+internal fun epubDocumentLanguageScript(override: String?): String {
+    val tag = override?.trim()?.takeIf { it.isNotEmpty() }
+        ?.let { JSONObject.quote(it) } ?: "null"
+    return """
+        (function(lang) {
+          var XML = 'http://www.w3.org/XML/1998/namespace';
+          [document.documentElement, document.body].forEach(function(el) {
+            if (!el) return;
+            var saved = el.__lagrangeLang;
+            if (lang !== null) {
+              if (!saved) {
+                saved = el.__lagrangeLang = {
+                  lang: el.getAttribute('lang'),
+                  xml: el.getAttributeNS(XML, 'lang')
+                };
+              }
+              if (el.getAttribute('lang') !== lang) el.setAttribute('lang', lang);
+              if (el.getAttributeNS(XML, 'lang') !== lang) el.setAttributeNS(XML, 'xml:lang', lang);
+            } else if (saved) {
+              if (saved.lang === null) el.removeAttribute('lang'); else el.setAttribute('lang', saved.lang);
+              if (saved.xml === null) el.removeAttributeNS(XML, 'lang'); else el.setAttributeNS(XML, 'xml:lang', saved.xml);
+              delete el.__lagrangeLang;
+            }
+          });
+        })($tag);
+    """.trimIndent()
 }
 
 /** Language to hand to the Readium TTS navigator: only an override; Auto keeps Readium's choice. */

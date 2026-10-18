@@ -442,7 +442,7 @@ class ReadiumEpubOpenInstrumentedTest {
         var installAttempts = 0
         val bridgeJob = launch {
             runEpubCurrentDocumentBridgeLoop(
-                installScript = "install-current-document",
+                installScript = { "install-current-document" },
                 evaluateJavascript = { script ->
                     if (script == "install-current-document") {
                         installAttempts += 1

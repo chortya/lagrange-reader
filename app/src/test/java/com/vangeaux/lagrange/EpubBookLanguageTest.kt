@@ -89,4 +89,13 @@ class EpubBookLanguageTest {
         assertEquals(listOf("en"), choice.suggested.map { it.tag })
         assertEquals(EpubContentLanguageSource.OVERRIDE, choice.resolved.source)
     }
+
+    @Test
+    fun `document language script applies an override and restores on Auto`() {
+        assertTrue(epubDocumentLanguageScript("pt-BR").trimEnd().endsWith("})(\"pt-BR\");"))
+        assertTrue(epubDocumentLanguageScript(null).trimEnd().endsWith("})(null);"))
+        assertTrue(epubDocumentLanguageScript("  ").trimEnd().endsWith("})(null);"))
+        // Quoted as a JavaScript string, so a stored tag cannot break out of the script.
+        assertTrue(epubDocumentLanguageScript("x\"); alert(1); (\"").contains("\"x\\\"); alert(1); (\\\"\""))
+    }
 }
