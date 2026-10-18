@@ -85,6 +85,20 @@ internal class ReaderWindowTracker(private val activity: FragmentActivity) {
         .drop(1)
         .debounce(READER_SPREAD_POSTURE_DEBOUNCE_MILLIS)
 
+    /**
+     * Runs [onMaybeChanged] when the spread decision flips, but only while the activity is started:
+     * a debounced posture change must not reach a fragment transaction after state is saved. Each
+     * start re-checks once, so a posture change made while stopped is applied on return.
+     */
+    fun observeSpreadChanges(decide: () -> Boolean, onMaybeChanged: () -> Unit) {
+        activity.lifecycleScope.launch {
+            activity.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                onMaybeChanged()
+                spreadChanges(decide).collect { onMaybeChanged() }
+            }
+        }
+    }
+
     companion object {
         @Volatile
         private var lastKnownHinge: ReaderHinge? = null

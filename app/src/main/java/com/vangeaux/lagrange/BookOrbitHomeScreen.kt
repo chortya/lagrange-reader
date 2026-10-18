@@ -4283,10 +4283,21 @@ private fun LibraryReaderConfiguration(
                 }
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Text("EPUB text", style = MaterialTheme.typography.titleMedium)
+            EpubTypesettingSettings(
+                value = value,
+                testTagPrefix = "options-reading-epub",
+                onPreferencesChange = { next -> onPreferencesChange(selectedLibrary.id, next) }
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Text("Unfolded screens", style = MaterialTheme.typography.titleMedium)
             ReaderSpreadSettings(
                 value = value,
-                layoutMode = ReaderLayoutMode.PAGINATED,
+                // Shared by EPUB and comics: spreads apply while either format is paginated.
+                layoutMode = if (
+                    value.epubLayoutMode == ReaderLayoutMode.PAGINATED ||
+                    value.comicLayoutMode == ReaderLayoutMode.PAGINATED
+                ) ReaderLayoutMode.PAGINATED else ReaderLayoutMode.CONTINUOUS,
                 testTagPrefix = "options-reading",
                 showComicOptions = true,
                 onPreferencesChange = { next -> onPreferencesChange(selectedLibrary.id, next) }
@@ -4294,6 +4305,53 @@ private fun LibraryReaderConfiguration(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
     }
+}
+
+/** EPUB text alignment and hyphenation, shared by library settings and the in-book options. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EpubTypesettingSettings(
+    value: LibraryReaderPreferences,
+    testTagPrefix: String,
+    onPreferencesChange: (LibraryReaderPreferences) -> Unit
+) {
+    Text("Text alignment", style = MaterialTheme.typography.titleMedium)
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        EpubTextAlignment.values().forEach { alignment ->
+            FilterChip(
+                selected = value.textAlignment == alignment,
+                onClick = { onPreferencesChange(value.copy(textAlignment = alignment)) },
+                label = { Text(alignment.displayName) },
+                modifier = Modifier.testTag("$testTagPrefix-text-align-${alignment.name.lowercase()}")
+            )
+        }
+    }
+    Text("Hyphenation", style = MaterialTheme.typography.titleMedium)
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        EpubHyphenation.values().forEach { hyphenation ->
+            FilterChip(
+                selected = value.hyphenation == hyphenation,
+                onClick = { onPreferencesChange(value.copy(hyphenation = hyphenation)) },
+                label = { Text(hyphenation.displayName) },
+                modifier = Modifier.testTag("$testTagPrefix-hyphenation-${hyphenation.name.lowercase()}")
+            )
+        }
+    }
+    Text(
+        if (value.hyphenation == EpubHyphenation.AUTO) {
+            "Auto hyphenates justified text only. Uses the book's language, or the device language if the book declares none."
+        } else {
+            "Uses the book's language, or the device language if the book declares none."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 @Composable
@@ -4608,43 +4666,7 @@ internal fun ReaderConfigurationControls(
                 modifier = Modifier.testTag("$testTagPrefix-word-spacing")
             )
         }
-        Text("Text alignment", style = MaterialTheme.typography.titleMedium)
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            EpubTextAlignment.values().forEach { alignment ->
-                FilterChip(
-                    selected = value.textAlignment == alignment,
-                    onClick = { onPreferencesChange(value.copy(textAlignment = alignment)) },
-                    label = { Text(alignment.displayName) },
-                    modifier = Modifier.testTag("$testTagPrefix-text-align-${alignment.name.lowercase()}")
-                )
-            }
-        }
-        Text("Hyphenation", style = MaterialTheme.typography.titleMedium)
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            EpubHyphenation.values().forEach { hyphenation ->
-                FilterChip(
-                    selected = value.hyphenation == hyphenation,
-                    onClick = { onPreferencesChange(value.copy(hyphenation = hyphenation)) },
-                    label = { Text(hyphenation.displayName) },
-                    modifier = Modifier.testTag("$testTagPrefix-hyphenation-${hyphenation.name.lowercase()}")
-                )
-            }
-        }
-        Text(
-            if (value.hyphenation == EpubHyphenation.AUTO) {
-                "Auto hyphenates justified text only. Uses the book's language, or the device language if the book declares none."
-            } else {
-                "Uses the book's language, or the device language if the book declares none."
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        EpubTypesettingSettings(value, testTagPrefix, onPreferencesChange)
     }
     if (format != ReaderConfigurationFormat.COMIC) {
         Row(
