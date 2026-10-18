@@ -82,7 +82,7 @@ class EpubTypesettingActivityInstrumentedTest {
           var lines = {};
           Array.prototype.forEach.call(whole.getClientRects(), function(x) {
             if (!onScreen(x)) return;
-            var key = Math.round(x.left / 50) + ':' + Math.round(x.top);
+            var key = Math.round(x.top);
             lines[key] = Math.max(lines[key] || 0, x.right);
           });
           var rights = Object.keys(lines).map(function(k) { return lines[k]; });
