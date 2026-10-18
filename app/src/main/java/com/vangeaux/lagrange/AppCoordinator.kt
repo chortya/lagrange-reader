@@ -979,6 +979,7 @@ class AppCoordinator internal constructor(
             if (current.providerId == PROVIDER_KOMGA) {
                 loginModule()?.clearSession()
             }
+            runCatching { repository.beginInteractiveSignIn() }
             _screen.value = current.copy(serverSignIn = ServerSignInState())
             startServerSignInWatcher()
         }

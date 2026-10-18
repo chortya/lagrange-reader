@@ -96,16 +96,30 @@ internal class CatalogImageRequestScope(
     val profileId: String?,
     internal val accessToken: String?,
     internal val cookie: String?,
-    val generation: Long
+    val generation: Long,
+    /** Stable for one signed-in account on this profile; see [CatalogImageAccountScopeStore]. */
+    val accountScope: String = catalogImageAnonymousAccountScope
 ) {
     internal val authorization: String? = accessToken
         ?.takeIf(String::isNotBlank)
         ?.let { "Bearer $it" }
-    val cacheScopeId: String = catalogImageCacheScopeId(
+
+    /** The credentials in use. Changes on every token refresh; guards 401 retries. */
+    val credentialScopeId: String = catalogImageCredentialScopeId(
         serverUrl = serverUrl,
         profileId = profileId,
         authorization = authorization,
         cookie = cookie
+    )
+
+    /**
+     * Disk/memory cover-cache scope. Keyed by the signed-in account, not its token, so covers cached
+     * before a token refresh stay usable (notably offline); different accounts never share it.
+     */
+    val cacheScopeId: String = catalogImageAccountCacheScopeId(
+        serverUrl = serverUrl,
+        profileId = profileId,
+        accountScope = accountScope
     )
 
     fun sameLogicalSession(other: CatalogImageRequestScope): Boolean =
@@ -114,10 +128,53 @@ internal class CatalogImageRequestScope(
             profileId == other.profileId
 
     fun sameCredentialScope(other: CatalogImageRequestScope): Boolean =
-        sameLogicalSession(other) && cacheScopeId == other.cacheScopeId
+        sameLogicalSession(other) && credentialScopeId == other.credentialScopeId
 }
 
-internal fun catalogImageCacheScopeId(
+internal const val catalogImageAnonymousAccountScope = "anonymous"
+
+internal fun catalogImageAccountCacheScopeId(
+    serverUrl: String,
+    profileId: String?,
+    accountScope: String
+): String = sha256Hex(listOf("account-cache", serverUrl, profileId.orEmpty(), accountScope).joinToString("\u0000"))
+
+/** Account scope for a password sign-in: the same user keeps its covers across sign-ins. */
+internal fun catalogImageUserAccountScope(serverUrl: String, username: String): String =
+    "user:" + sha256Hex(serverUrl.trim().trimEnd('/') + "\u0000" + username.trim().lowercase())
+
+private fun sha256Hex(value: String): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(StandardCharsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
+
+/**
+ * Per-profile identity of the signed-in account for cover caching. Set at sign-in, kept across token
+ * refreshes, profile switches and session restores, removed at sign-out. A missing value is created
+ * on first authenticated use (sessions from before this store existed, or WebView cookie sign-ins).
+ */
+internal class CatalogImageAccountScopeStore(context: Context) {
+    private val preferences = context.getSharedPreferences("catalog_image_account_scopes", Context.MODE_PRIVATE)
+
+    fun read(profileKey: String): String? = preferences.getString(profileKey, null)
+
+    fun write(profileKey: String, accountScope: String) {
+        preferences.edit().putString(profileKey, accountScope).apply()
+    }
+
+    fun resolve(profileKey: String, hasCredentials: Boolean): String =
+        read(profileKey) ?: if (hasCredentials) {
+            ("session:" + java.util.UUID.randomUUID()).also { write(profileKey, it) }
+        } else {
+            catalogImageAnonymousAccountScope
+        }
+
+    fun clear(profileKey: String) {
+        preferences.edit().remove(profileKey).apply()
+    }
+}
+
+internal fun catalogImageCredentialScopeId(
     serverUrl: String,
     profileId: String?,
     authorization: String?,
@@ -288,6 +345,8 @@ internal fun extractAccessToken(payload: String): String? {
 }
 
 interface BookOrbitDataSource {
+    /** An interactive sign-in (server sign-in page) is starting; its account is not known yet. */
+    suspend fun beginInteractiveSignIn() {}
     suspend fun getServerUrl(): String?
     suspend fun setServerUrl(serverUrl: String)
     suspend fun clearServer()
@@ -474,6 +533,7 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
     private val annotationMutationQueueStore = AnnotationMutationQueueStore(context)
     private val annotationLocalIdMappingStore = AnnotationLocalIdMappingStore(context)
     private val downloadStore = DownloadStore(context)
+    private val catalogImageAccountScopeStore = CatalogImageAccountScopeStore(context)
     private val browserSnapshotStore = BrowserSnapshotStore(context)
     private val libraryCatalogStore = LibraryCatalogStore(context)
     private val catalogSnapshotStore = CatalogSnapshotStore(context)
@@ -575,14 +635,23 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
             val serverUrl = preferences[Keys.SERVER_URL].orEmpty()
             val profileId = ServerProfileStore(context).active()?.id
                 ?: serverUrl.takeIf(String::isNotBlank)?.let(::serverProfileId)
+            val accessToken = preferences[Keys.ACCESS_TOKEN]
+            val cookie = requestUrl
+                ?.takeIf { sameHttpOrigin(it, serverUrl) }
+                ?.let { CookieManager.getInstance().getCookie(it) }
+            val hasCredentials = !accessToken.isNullOrBlank() ||
+                !(cookie ?: serverUrl.takeIf(String::isNotBlank)?.let { CookieManager.getInstance().getCookie(it) })
+                    .isNullOrBlank()
             val scope = CatalogImageRequestScope(
                 serverUrl = serverUrl,
                 profileId = profileId,
-                accessToken = preferences[Keys.ACCESS_TOKEN],
-                cookie = requestUrl
-                    ?.takeIf { sameHttpOrigin(it, serverUrl) }
-                    ?.let { CookieManager.getInstance().getCookie(it) },
-                generation = generation
+                accessToken = accessToken,
+                cookie = cookie,
+                generation = generation,
+                accountScope = catalogImageAccountScopeStore.resolve(
+                    profileKey = profileId ?: serverUrl,
+                    hasCredentials = hasCredentials
+                )
             )
             if (CatalogImageCoordinator.generation.get() != generation) {
                 throw StaleCatalogImageRequestException()
@@ -669,7 +738,9 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
     }
 
     override suspend fun clearServer() {
-        mutateCatalogImageSession(clearDiskCacheAfter = true) {
+        // Covers stay on disk: they are scoped by server, profile and account, so switching
+        // profiles (which goes through here) keeps each profile's covers for offline use.
+        mutateCatalogImageSession {
             OfflineCacheScheduler.cancelAll(context)
             CoverCacheWarmWorker.cancelAll(context)
             libraryCoverAspectRatios = emptyMap()
@@ -682,8 +753,17 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
         }
     }
 
+    override suspend fun beginInteractiveSignIn() {
+        // The server sign-in page may sign in a different account than the last one on this
+        // profile; forget the cover-cache account so it starts fresh on first authenticated use.
+        mutateCatalogImageSession {
+            catalogImageAccountScopeStore.clear(currentProfileId() ?: getServerUrl().orEmpty())
+        }
+    }
+
     override suspend fun clearSession() {
         mutateCatalogImageSession(clearDiskCacheAfter = true) {
+            catalogImageAccountScopeStore.clear(currentProfileId() ?: getServerUrl().orEmpty())
             clearRuntimeSession()
             currentProfileId()?.let(profileSessionStore::clear)
         }
@@ -815,6 +895,11 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
             .toRequestBody(JSON)
         mutateCatalogImageSession {
             requestLogin(body)
+            val serverUrl = getServerUrl().orEmpty()
+            catalogImageAccountScopeStore.write(
+                currentProfileId() ?: serverUrl,
+                catalogImageUserAccountScope(serverUrl, username)
+            )
         }
     }
 
@@ -860,6 +945,11 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
                     prefs[Keys.ACCESS_TOKEN] = accessToken
                 }
             }
+            // The SSO identity is not known here: a new sign-in starts a new cover-cache scope.
+            catalogImageAccountScopeStore.write(
+                currentProfileId() ?: getServerUrl().orEmpty(),
+                "oidc:" + java.util.UUID.randomUUID()
+            )
         }
     }
 
@@ -1527,8 +1617,39 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
             }
             if (result.bytes.isNotEmpty()) return@withContext result.bytes
         }
+        if (lastFailure is StaleCatalogImageRequestException) throw lastFailure as Throwable
+        // No server cover reachable (offline) or none published: use the downloaded file's own.
+        localFileCover(book, initialScope)?.let { return@withContext it }
         lastFailure?.let { throw it }
         null
+    }
+
+    private suspend fun localFileCover(book: BookSummary, scope: CatalogImageRequestScope): ByteArray? {
+        val file = book.localPath?.let(::File)?.takeIf(File::isFile)
+            ?: downloadStore.readAll(scope.serverUrl)
+                .filter { it.status == DownloadRecordStatus.COMPLETE }
+                .let { records ->
+                    records.firstOrNull { it.fileId == book.fileId } ?: records.firstOrNull { it.bookId == book.id }
+                }
+                ?.localPath?.let(::File)?.takeIf(File::isFile)
+            ?: return null
+        val identity = scopedCoverCacheIdentity(
+            scope.cacheScopeId,
+            book.id,
+            "local-file:${file.name}#modified=${file.lastModified()}"
+        )
+        CatalogImageCoordinator.cacheMutationMutex.withLock {
+            requireCurrentCatalogImageGeneration(scope)
+            coverCacheStore.read(scope.serverUrl, book.id, identity)?.takeIf { it.isNotEmpty() }
+                // A sign-out can invalidate the session while the read is in flight.
+                ?.also { requireCurrentCatalogImageGeneration(scope) }
+        }?.let { return it }
+        val bytes = extractLocalCover(file) ?: return null
+        CatalogImageCoordinator.cacheMutationMutex.withLock {
+            requireCurrentCatalogImageGeneration(scope)
+            coverCacheStore.save(scope.serverUrl, book.id, identity, bytes)
+        }
+        return bytes
     }
 
     private suspend fun loadScopedCover(
