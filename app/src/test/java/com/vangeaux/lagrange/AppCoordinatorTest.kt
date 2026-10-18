@@ -2247,6 +2247,57 @@ class AppCoordinatorTest {
     }
 
     @Test
+    fun `choosing the server already in use reconnects instead of clearing it`() = runTest {
+        val repository = FakeBookOrbitDataSource(
+            serverUrl = serverUrl,
+            checkServerResult = ServerCheckResult.UnreachableHost
+        )
+        val coordinator = AppCoordinator(repository, StandardTestDispatcher(testScheduler))
+
+        coordinator.changeServer("$serverUrl/")
+        advanceUntilIdle()
+
+        assertEquals(0, repository.clearServerCalls)
+        assertEquals("the current server is reconnected, not re-validated as a switch", 0, repository.checkServerCalls)
+        assertEquals(serverUrl, repository.serverUrl)
+        assertFalse(coordinator.screen.value is AppScreen.ServerSetup)
+    }
+
+    @Test
+    fun `changing provider at the same address is a real switch`() = runTest {
+        val repository = FakeBookOrbitDataSource(serverUrl = serverUrl)
+        val coordinator = AppCoordinator(repository, StandardTestDispatcher(testScheduler))
+
+        coordinator.changeServer(serverUrl, providerId = PROVIDER_KOMGA)
+        advanceUntilIdle()
+
+        assertEquals(1, repository.checkServerCalls)
+        assertEquals(1, repository.clearServerCalls)
+    }
+
+    @Test
+    fun `continuing setup after a failed switch keeps the current server until the target is reachable`() = runTest {
+        val replacement = "https://replacement.example.test"
+        val repository = FakeBookOrbitDataSource(
+            serverUrl = serverUrl,
+            checkServerResult = ServerCheckResult.UnreachableHost
+        )
+        val coordinator = AppCoordinator(repository, StandardTestDispatcher(testScheduler))
+
+        coordinator.saveServer(replacement)
+        advanceUntilIdle()
+        assertEquals(0, repository.clearServerCalls)
+        assertEquals(serverUrl, repository.serverUrl)
+        assertTrue(coordinator.screen.value is AppScreen.ServerSetup)
+
+        // Once the replacement is reachable, the previous server's session is cleared first.
+        repository.checkServerResult = ServerCheckResult.Reachable
+        coordinator.saveServer(replacement)
+        advanceUntilIdle()
+        assertEquals(1, repository.clearServerCalls)
+    }
+
+    @Test
     fun `change server leaves the replacement prefilled when its validation fails`() = runTest {
         val replacement = "https://unreachable.example.test"
         val repository = FakeBookOrbitDataSource(
@@ -2258,8 +2309,10 @@ class AppCoordinatorTest {
         coordinator.changeServer(replacement)
         advanceUntilIdle()
 
-        assertEquals(1, repository.clearServerCalls)
-        assertNull(repository.serverUrl)
+        // Nothing is cleared before the replacement is reachable: the current server, its session,
+        // caches and unsynced progress stay as they were.
+        assertEquals(0, repository.clearServerCalls)
+        assertEquals(serverUrl, repository.serverUrl)
         assertEquals(
             AppScreen.ServerSetup(
                 serverUrl = replacement,
@@ -3419,7 +3472,12 @@ private class FakeBookOrbitDataSource(
 
     override suspend fun canReachServer(serverUrl: String): Boolean = checkServerResult == ServerCheckResult.Reachable
 
-    override suspend fun checkServer(serverUrl: String): ServerCheckResult = checkServerResult
+    var checkServerCalls = 0
+
+    override suspend fun checkServer(serverUrl: String): ServerCheckResult {
+        checkServerCalls += 1
+        return checkServerResult
+    }
 
     override suspend fun updateAnnotation(bookId: String, annotationId: String, note: String?, color: String?, style: String?) {
         updateAnnotationError?.let { throw it }
