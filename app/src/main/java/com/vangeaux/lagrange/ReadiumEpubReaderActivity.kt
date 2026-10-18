@@ -862,10 +862,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         )
         twoPageSpreadActive = computeTwoPageSpread()
         windowTracker.start()
-        lifecycleScope.launch {
-            windowTracker.spreadChanges { computeTwoPageSpread() }
-                .collect { recreateIfSpreadChanged() }
-        }
+        windowTracker.observeSpreadChanges({ computeTwoPageSpread() }) { recreateIfSpreadChanged() }
         configureSystemBars()
         createReaderViews()
         bindTtsService()
@@ -3241,13 +3238,6 @@ internal fun closeEpubReaderPlayback(
 }
 
 /**
- * Position to restore when Android rebuilds the reader from saved instance state. The stores are
- * written on every position change, including by background read-aloud after the saved state was
- * captured, so a stored position is never older than the saved state and wins. The saved state is
- * only a fallback (for example in preview, which never writes the store). Without saved state this
- * is a fresh launch, which resolves its position from the intent and the store itself.
- */
-/**
  * A visual position is recorded only when the reader actually moved: a different resource or a
  * different progression within it. Readium re-reports the same place on resume, sometimes enriched
  * with `position`/`totalProgression` once positions are computed; that is not a move.
@@ -3261,6 +3251,13 @@ internal fun shouldRecordVisualLocator(lastRecorded: Locator?, current: Locator)
     return kotlin.math.abs(lastProgression - currentProgression) > 1e-6
 }
 
+/**
+ * Position to restore when Android rebuilds the reader from saved instance state. The stores are
+ * written on every position change, including by background read-aloud after the saved state was
+ * captured, so a stored position is never older than the saved state and wins. The saved state is
+ * only a fallback (for example in preview, which never writes the store). Without saved state this
+ * is a fresh launch, which resolves its position from the intent and the store itself.
+ */
 internal fun epubRestoredLocator(savedState: Locator?, stored: Locator?): Locator? =
     savedState?.let { stored ?: it }
 
