@@ -264,7 +264,7 @@ class BookOrbitRepositoryIntegrationTest {
     }
 
     @Test
-    fun catalogImageRejectsOversizedDeclaredResponse() = runBlocking {
+    fun catalogImageRejectsOversizedDeclaredResponse() = runBlocking<Unit> {
         server.enqueue(
             MockResponse()
                 .setBody("not-read")
@@ -279,7 +279,7 @@ class BookOrbitRepositoryIntegrationTest {
     }
 
     @Test
-    fun redirectedComicPageUsesTheLimitForTheFinalUrl() = runBlocking {
+    fun redirectedComicPageUsesTheLimitForTheFinalUrl() = runBlocking<Unit> {
         val external = MockWebServer().apply { start() }
         try {
             server.enqueue(
