@@ -44,6 +44,7 @@ class EpubSpreadPreferencesTest {
         assertEquals(10f to 30f, epubHorizontalPaddingPercents(10f, 30f, twoPageSpread = false))
         assertEquals(0f to 100f, epubHorizontalPaddingPercents(-5f, 150f, twoPageSpread = false))
         assertEquals(0f to 0f, epubHorizontalPaddingPercents(10f, 30f, twoPageSpread = true))
+        assertEquals(10f to 30f, epubHorizontalPaddingPercents(10f, 30f, twoPageSpread = true, fixedLayout = true))
     }
 
     @Test
@@ -60,6 +61,9 @@ class EpubSpreadPreferencesTest {
     fun `spread page margin never lets the two pages touch`() {
         assertEquals(EPUB_SPREAD_MIN_PAGE_MARGIN_CSS_PX, epubSpreadPageMarginCssPx(841, 0f, 0f), 0.0)
         assertEquals(EPUB_SPREAD_MIN_PAGE_MARGIN_CSS_PX, epubSpreadPageMarginCssPx(841, -5f, -5f), 0.0)
-        assertEquals(841 * 100 / 400.0, epubSpreadPageMarginCssPx(841, 150f, 150f), 0.0001)
+        // Capped so each page keeps at least half its width for text.
+        assertEquals(841 / 8.0, epubSpreadPageMarginCssPx(841, 150f, 150f), 0.0001)
+        assertEquals(841 / 8.0, epubSpreadPageMarginCssPx(841, 100f, 100f), 0.0001)
+        assertEquals(841 / 8.0, epubSpreadPageMarginCssPx(841, 50f, 50f), 0.0001)
     }
 }

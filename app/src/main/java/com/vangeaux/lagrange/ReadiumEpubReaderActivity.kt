@@ -99,6 +99,7 @@ import org.readium.r2.shared.publication.Href
 import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
+import org.readium.r2.shared.publication.epub.EpubLayout
 import org.readium.r2.shared.publication.services.content.ContentService
 import org.readium.r2.shared.publication.services.positions
 import org.readium.r2.shared.util.asset.AssetRetriever
@@ -192,11 +193,13 @@ internal const val EPUB_SPREAD_MIN_PAGE_MARGIN_CSS_PX = 12.0
 /**
  * Margin on each side of each spread page, in CSS px (= dp). It is the same size the left/right
  * margin setting gives a single page on this window, so changing margins changes all four page
- * edges equally and both pages stay symmetric around the fold.
+ * edges equally and both pages stay symmetric around the fold. It is capped at an eighth of the
+ * window, so each page keeps at least half its width for text, as a single page does at 100%.
  */
 internal fun epubSpreadPageMarginCssPx(windowWidthDp: Int, leftPercent: Float, rightPercent: Float): Double {
     val mean = (leftPercent.coerceIn(0f, 100f) + rightPercent.coerceIn(0f, 100f)) / 2f
-    return maxOf(windowWidthDp.coerceAtLeast(0) * mean / 400.0, EPUB_SPREAD_MIN_PAGE_MARGIN_CSS_PX)
+    val width = windowWidthDp.coerceAtLeast(0)
+    return maxOf(minOf(width * mean / 400.0, width / 8.0), EPUB_SPREAD_MIN_PAGE_MARGIN_CSS_PX)
 }
 
 internal fun epubSpreadActive(twoPageSpread: Boolean, layoutMode: ReaderLayoutMode): Boolean =
@@ -220,15 +223,17 @@ internal fun epubSpreadRsProperties(twoPageSpread: Boolean): RsProperties = if (
 }
 
 /**
- * Left/right reader container padding percentages. A spread moves the horizontal margins into each
- * Readium column (see [epubSpreadPageMarginCssPx]) so both pages get the same margin on both sides.
+ * Left/right reader container padding percentages. A reflowable spread moves the horizontal margins
+ * into each Readium column (see [epubSpreadPageMarginCssPx]) so both pages get the same margin on
+ * both sides. Fixed-layout spreads are laid out by Readium itself and keep the container margins.
  */
 internal fun epubHorizontalPaddingPercents(
     left: Float,
     right: Float,
-    twoPageSpread: Boolean
+    twoPageSpread: Boolean,
+    fixedLayout: Boolean = false
 ): Pair<Float, Float> {
-    if (twoPageSpread) return 0f to 0f
+    if (twoPageSpread && !fixedLayout) return 0f to 0f
     return left.coerceIn(0f, 100f) to right.coerceIn(0f, 100f)
 }
 
@@ -746,6 +751,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
     private val windowTracker by lazy { ReaderWindowTracker(this) }
     // Fixed for the navigator's lifetime: Readium CSS properties are set at fragment creation.
     private var twoPageSpreadActive = false
+    private var fixedLayoutPublication = false
     private var showTapZoneTutorialAfterChanges by mutableStateOf(true)
     private var chapterTitles by mutableStateOf(emptyList<String>())
     private var currentChapter by mutableStateOf(0)
@@ -1313,6 +1319,10 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
             }
         }
         val navigatorFactory = EpubNavigatorFactory(openedPublication)
+        // Readium draws fixed-layout spreads itself, so those keep the container margins.
+        fixedLayoutPublication =
+            navigatorFactory.createPreferencesEditor(EpubPreferences()).layout == EpubLayout.FIXED
+        applyReaderPadding()
         val fragmentFactory = navigatorFactory.createFragmentFactory(
             initialLocator = initialLocator,
             initialPreferences = readiumPreferences(
@@ -2922,7 +2932,8 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         val (leftPercent, rightPercent) = epubHorizontalPaddingPercents(
             padding.left,
             padding.right,
-            epubSpreadActive(twoPageSpreadActive, epubLayoutMode)
+            epubSpreadActive(twoPageSpreadActive, epubLayoutMode),
+            fixedLayout = fixedLayoutPublication
         )
         readerContainer.setPadding(
             horizontal(leftPercent),

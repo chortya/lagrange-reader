@@ -69,13 +69,14 @@ For EPUB, verify chapter/page navigation, continuous active-resource seeking, te
 
 ### Foldable EPUB spreads
 
-Automated coverage: `ReaderSpreadPolicyTest`, `EpubSpreadPreferencesTest` (JVM); `EpubSpreadActivityInstrumentedTest` (connected). Spread assertions need a large horizontal window, such as the Android Studio Pixel Fold AVD unfolded (2208×1840, 420 dpi). On phone-sized devices they are skipped through a JUnit assumption. Run connected tests on a non-English host with `JAVA_TOOL_OPTIONS="-Duser.language=en -Duser.country=US"`: several existing parser tests assert `.`-formatted percentages.
+Automated coverage: `ReaderSpreadPolicyTest`, `EpubSpreadPreferencesTest` (JVM); `EpubSpreadWebViewInstrumentedTest`, `EpubSpreadActivityInstrumentedTest` (connected). Spread assertions need a large horizontal window, such as the Android Studio Pixel Fold AVD unfolded (2208×1840, 420 dpi). On phone-sized devices they are skipped through a JUnit assumption. Run connected tests on a non-English host with `JAVA_TOOL_OPTIONS="-Duser.language=en -Duser.country=US"`: several existing parser tests assert `.`-formatted percentages.
 
 On an unfolded foldable or a large landscape tablet:
 
 - In landscape, paginated EPUB shows two columns. A page turn advances both columns.
 - Rotate to portrait, fold to the cover screen, open split-screen, switch to continuous layout, or turn off `Two-page spread when unfolded`: each shows one column.
-- Margins: each page has the same margin on its outer and inner side, and the gap between the pages is twice that. Raising or lowering the left/right margin widens or narrows all four page edges at once, without reopening the book. Uneven left/right settings use their mean.
+- Margins: each page has the same margin on its outer and inner side, and the gap between the pages is twice that. Raising or lowering the left/right margin widens or narrows all four page edges at once, without reopening the book. Uneven left/right settings use their mean. At the largest settings each page still keeps half its width for text.
+- A fixed-layout EPUB shows two facing pages, and the left/right margin setting still applies around the spread.
 - Line spacing, word spacing, font size and font family change both pages identically and reflow text across both columns.
 - Confirm the following still work: resume position after fold/unfold or rotation, TTS sentence highlighting and auto page-turn across columns, highlights spanning the column boundary, and tap zones.
 - Comics and PDF stay single-page.

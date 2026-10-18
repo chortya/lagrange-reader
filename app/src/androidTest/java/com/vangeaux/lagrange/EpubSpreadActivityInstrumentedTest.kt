@@ -255,6 +255,19 @@ class EpubSpreadActivityInstrumentedTest {
             awaitSpread(scenario, "uneven margins were not averaged") { kotlin.math.abs(it.leftOuter - mean) < 2.0 },
             mean
         )
+
+        // The largest setting is capped so each page keeps half its width for text.
+        scenario.onActivity { activity ->
+            activity.applyReaderPreferencesForTest {
+                it.copy(padding = it.padding.copy(left = 100f, right = 100f))
+            }
+        }
+        val capped = epubSpreadPageMarginCssPx(widthDp, 100f, 100f)
+        assertEquals(widthDp / 8.0, capped, 0.0001)
+        val maximal = awaitSpread(scenario, "maximum margins were not capped") {
+            kotlin.math.abs(it.leftOuter - capped) < 2.0 && it.leftLines > 0 && it.rightLines > 0
+        }
+        assertMargins(maximal, capped)
     }
 
     @Test
