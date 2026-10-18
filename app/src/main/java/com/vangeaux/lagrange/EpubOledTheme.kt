@@ -1,6 +1,8 @@
 package com.vangeaux.lagrange
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.CardColors
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -108,6 +110,21 @@ internal fun epubReaderOledPanelBorder(): BorderStroke? =
         BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     } else {
         null
+    }
+
+/**
+ * Fill for floating reader panels. Material3's filled card uses `surfaceVariant`, which is the grey
+ * hairline colour in the OLED scheme, so OLED panels are filled with the black surface instead.
+ */
+@Composable
+internal fun epubReaderOledPanelColors(): CardColors =
+    if (LocalEpubReaderOledOutlines.current) {
+        CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface
+        )
+    } else {
+        CardDefaults.cardColors()
     }
 
 /** Android view theme for the EPUB reader activity; applied before the window is created. */

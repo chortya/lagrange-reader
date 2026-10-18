@@ -61,6 +61,7 @@ internal fun EpubTtsControls(
     Box(modifier = modifier.fillMaxWidth()) {
         Card(
             modifier = Modifier.fillMaxWidth().navigationBarsPadding(),
+            colors = epubReaderOledPanelColors(),
             border = epubReaderOledPanelBorder()
         ) {
             Row(
