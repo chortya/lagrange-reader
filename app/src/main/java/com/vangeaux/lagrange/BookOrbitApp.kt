@@ -57,6 +57,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
@@ -1971,31 +1972,44 @@ private fun EpubBookLanguageSettings(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                DropdownMenuItem(
-                    text = { Text(if (isOverride) "Auto (book, else device language)" else "✓ ${choice.summary}") },
-                    onClick = {
-                        expanded = false
-                        onChange(null)
-                    },
-                    modifier = Modifier.testTag("reader-options-book-language-auto")
-                )
-                HorizontalDivider()
-                fun selected(tag: String) = isOverride && choice.resolved.tag == tag
-                (choice.suggested + choice.all.filterNot { option -> choice.suggested.any { it.tag == option.tag } })
-                    .forEachIndexed { index, option ->
+        }
+    }
+    if (expanded) {
+        val options = remember(choice) {
+            choice.suggested + choice.all.filterNot { option -> choice.suggested.any { it.tag == option.tag } }
+        }
+        fun selected(tag: String) = isOverride && choice.resolved.tag == tag
+        fun pick(tag: String?) {
+            expanded = false
+            onChange(tag)
+        }
+        // A dialog with a lazy list: the full language list is a couple of hundred entries.
+        AlertDialog(
+            onDismissRequest = { expanded = false },
+            title = { Text("Book language") },
+            text = {
+                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                    item(key = "auto") {
+                        DropdownMenuItem(
+                            text = { Text(if (isOverride) "Auto (book, else device language)" else "✓ ${choice.summary}") },
+                            onClick = { pick(null) },
+                            modifier = Modifier.testTag("reader-options-book-language-auto")
+                        )
+                        HorizontalDivider()
+                    }
+                    itemsIndexed(options, key = { _, option -> option.tag }) { index, option ->
                         if (index == choice.suggested.size) HorizontalDivider()
                         DropdownMenuItem(
                             text = { Text(if (selected(option.tag)) "✓ ${option.displayName}" else option.displayName) },
-                            onClick = {
-                                expanded = false
-                                onChange(option.tag)
-                            },
+                            onClick = { pick(option.tag) },
                             modifier = Modifier.testTag("reader-options-book-language-${option.tag}")
                         )
                     }
-            }
-        }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { expanded = false }) { Text("Cancel") } }
+        )
     }
 }
 

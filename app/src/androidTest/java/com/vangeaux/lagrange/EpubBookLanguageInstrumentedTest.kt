@@ -57,7 +57,12 @@ class EpubBookLanguageInstrumentedTest {
         }
     }
 
-    private suspend fun openSession(service: EpubTtsPlaybackService.PlaybackBinder, languageTag: String?) {
+    /** [afterOpen] runs in the same main-thread block, before preparation can complete. */
+    private suspend fun openSession(
+        service: EpubTtsPlaybackService.PlaybackBinder,
+        languageTag: String?,
+        afterOpen: () -> Unit = {}
+    ) {
         val spec = EpubTtsSessionSpec(
             ownerToken = OWNER,
             requestId = EpubTtsRequestSession.begin(),
@@ -83,6 +88,7 @@ class EpubBookLanguageInstrumentedTest {
                 title = spec.title
             )
             assertTrue(service.open(spec))
+            afterOpen()
         }
     }
 
@@ -120,6 +126,21 @@ class EpubBookLanguageInstrumentedTest {
 
             withContext(Dispatchers.Main.immediate) { service.setLanguage(OWNER, null) }
             assertVoicesAreIn(awaitVoiceLanguage(service, "nl"), "nl")
+        }
+    }
+
+    @Test
+    fun languageChangedWhileReadAloudIsPreparingIsApplied() = runBlocking {
+        withTtsService { service ->
+            openSession(service, languageTag = null) {
+                // Same main-thread turn as open(): the navigator cannot exist yet, so only the
+                // session spec can take the change.
+                assertTrue("session should still be preparing", service.state.value.isPreparing)
+                service.setLanguage(OWNER, "en")
+            }
+            assertVoicesAreIn(awaitVoiceLanguage(service, "en"), "en")
+            delay(1_000L)
+            assertEquals("en", service.state.value.voiceLanguageTag?.substringBefore('-'))
         }
     }
 

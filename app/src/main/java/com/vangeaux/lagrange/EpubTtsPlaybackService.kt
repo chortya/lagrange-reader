@@ -274,16 +274,7 @@ class EpubTtsPlaybackService : Service() {
             val spec = activeSpec ?: return
             if (spec.languageTag == languageTag) return
             activeSpec = spec.copy(languageTag = languageTag)
-            val settings = mutableState.value.settings
-            navigator?.submitPreferences(
-                AndroidTtsPreferences(
-                    language = languageTag?.let(::Language),
-                    pitch = settings.pitch.toDouble(),
-                    speed = settings.speed.toDouble(),
-                    voices = settings.voiceIds.mapKeys { (language, _) -> Language(language) }
-                        .mapValues { (_, voiceId) -> AndroidTtsEngine.Voice.Id(voiceId) }
-                )
-            )
+            navigator?.let { submitTtsPreferences(it, mutableState.value.settings, languageTag) }
             publishNavigatorCapabilities()
             updateNotification()
         }
@@ -294,15 +285,7 @@ class EpubTtsPlaybackService : Service() {
             val previous = mutableState.value.settings
             mutableState.value = mutableState.value.copy(settings = normalized)
             activeSpec = activeSpec?.copy(settings = normalized)
-            navigator?.submitPreferences(
-                AndroidTtsPreferences(
-                    language = activeSpec?.languageTag?.let(::Language),
-                    pitch = normalized.pitch.toDouble(),
-                    speed = normalized.speed.toDouble(),
-                    voices = normalized.voiceIds.mapKeys { (language, _) -> Language(language) }
-                        .mapValues { (_, voiceId) -> AndroidTtsEngine.Voice.Id(voiceId) }
-                )
-            )
+            navigator?.let { submitTtsPreferences(it, normalized, activeSpec?.languageTag) }
             if (previous.speed == normalized.speed &&
                 previous.pitch == normalized.pitch &&
                 previous.pauses != normalized.pauses
@@ -530,10 +513,16 @@ class EpubTtsPlaybackService : Service() {
             seekTtsToSelection(created, spec.initialLocator, spec.selectionText)
             publication = opened
             navigator = created
+            // Language or voice settings changed while preparing only reached activeSpec; the
+            // navigator was built from the spec captured at the start, so bring it up to date.
+            val current = activeSpec?.takeIf { it.ownerToken == spec.ownerToken } ?: spec
+            if (current.languageTag != spec.languageTag || current.settings != spec.settings) {
+                submitTtsPreferences(created, current.settings, current.languageTag)
+            }
             binder.publish {
                 it.copy(
                     isPreparing = false,
-                    settings = spec.settings.normalized(),
+                    settings = current.settings.normalized(),
                     failure = null
                 )
             }
@@ -542,6 +531,23 @@ class EpubTtsPlaybackService : Service() {
             if (spec.playWhenReady) binder.play(spec.ownerToken)
             updateNotification()
         }
+    }
+
+    private fun submitTtsPreferences(
+        active: AndroidTtsNavigator,
+        settings: EpubTtsSettings,
+        languageTag: String?
+    ) {
+        val normalized = settings.normalized()
+        active.submitPreferences(
+            AndroidTtsPreferences(
+                language = languageTag?.let(::Language),
+                pitch = normalized.pitch.toDouble(),
+                speed = normalized.speed.toDouble(),
+                voices = normalized.voiceIds.mapKeys { (language, _) -> Language(language) }
+                    .mapValues { (_, voiceId) -> AndroidTtsEngine.Voice.Id(voiceId) }
+            )
+        )
     }
 
     private suspend fun seekTtsToSelection(
