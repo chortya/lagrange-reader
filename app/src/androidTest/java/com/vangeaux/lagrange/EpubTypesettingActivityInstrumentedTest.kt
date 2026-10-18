@@ -187,10 +187,13 @@ class EpubTypesettingActivityInstrumentedTest {
     ) { scenario ->
         val expected = epubFallbackContentLanguage(emptyList(), java.util.Locale.getDefault())
         assumeTrue("Device language must be one that hyphenates", expected != null)
-        val typeset = awaitTypesetting(scenario, "book without a language was not hyphenated") {
-            it.align == "justify" && it.splitWords > 0
+        val typeset = awaitTypesetting(scenario, "book without a language did not get the device language") {
+            it.align == "justify" && it.contentLanguage == expected
         }
         assertEquals(expected, typeset.contentLanguage)
+        // The fixture is English text, so only English patterns can split its words.
+        assumeTrue("Hyphenation check needs an English device language", expected!!.startsWith("en"))
+        awaitTypesetting(scenario, "book without a language was not hyphenated") { it.splitWords > 0 }
     }
 
     private fun launchEpub(epub: File, readerKey: String): ActivityScenario<ReadiumEpubReaderActivity> =
