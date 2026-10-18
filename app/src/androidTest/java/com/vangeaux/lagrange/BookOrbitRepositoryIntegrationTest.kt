@@ -264,7 +264,7 @@ class BookOrbitRepositoryIntegrationTest {
     }
 
     @Test
-    fun catalogImageRejectsOversizedDeclaredResponse() = runBlocking {
+    fun catalogImageRejectsOversizedDeclaredResponse() = runBlocking<Unit> {
         server.enqueue(
             MockResponse()
                 .setBody("not-read")
@@ -279,7 +279,7 @@ class BookOrbitRepositoryIntegrationTest {
     }
 
     @Test
-    fun redirectedComicPageUsesTheLimitForTheFinalUrl() = runBlocking {
+    fun redirectedComicPageUsesTheLimitForTheFinalUrl() = runBlocking<Unit> {
         val external = MockWebServer().apply { start() }
         try {
             server.enqueue(
@@ -879,6 +879,153 @@ class BookOrbitRepositoryIntegrationTest {
             "/api/v1/books/files/preview-audio-retry-file/download",
             server.takeRequest(5, TimeUnit.SECONDS)?.path
         )
+    }
+
+    /** Every cover request fails as if the device were offline. */
+    private fun goOffline(requests: Int = 4) {
+        repeat(requests) {
+            server.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_START))
+        }
+    }
+
+    @Test
+    fun coversCachedBeforeATokenRefreshStillLoadOffline() = runBlocking {
+        val coverUrl = server.url("/api/v1/books/book-1/thumbnail").toString()
+        val book = BookSummary("library-1", "book-1", null, "Book", coverUrl = coverUrl)
+        server.enqueue(jsonResponse("""{"accessToken":"token-1"}"""))
+        repository.login("reader", "secret")
+        server.takeRequest(5, TimeUnit.SECONDS)!!
+        server.enqueue(MockResponse().setBody("cached-cover"))
+        assertEquals("cached-cover", repository.loadBookCover(book)?.decodeToString())
+        server.takeRequest(5, TimeUnit.SECONDS)!!
+
+        // The access token expires and is refreshed, as happens routinely.
+        server.enqueue(MockResponse().setResponseCode(401))
+        server.enqueue(jsonResponse("""{"accessToken":"token-2"}"""))
+        server.enqueue(jsonResponse("""{"id":"reader"}"""))
+        repository.getSessionState()
+        assertEquals("/api/v1/auth/me", server.takeRequest(5, TimeUnit.SECONDS)!!.path)
+        assertEquals("/api/v1/auth/refresh", server.takeRequest(5, TimeUnit.SECONDS)!!.path)
+        assertEquals("Bearer token-2", server.takeRequest(5, TimeUnit.SECONDS)!!.getHeader("Authorization"))
+
+        goOffline()
+        assertEquals("cached-cover", repository.loadBookCover(book)?.decodeToString())
+    }
+
+    @Test
+    fun serverSignInPageStartsANewCoverAccountSoCookieSessionsDoNotInheritCovers() = runBlocking {
+        val serverUrl = server.url("/").toString().trimEnd('/')
+        val coverUrl = server.url("/api/v1/books/book-1/thumbnail").toString()
+        val book = BookSummary("library-1", "book-1", null, "Book", coverUrl = coverUrl)
+        server.enqueue(jsonResponse("""{"accessToken":"account-a"}"""))
+        repository.login("account-a", "secret")
+        server.takeRequest(5, TimeUnit.SECONDS)!!
+        server.enqueue(MockResponse().setBody("account-a-cover"))
+        assertEquals("account-a-cover", repository.loadBookCover(book)?.decodeToString())
+        server.takeRequest(5, TimeUnit.SECONDS)!!
+
+        // Back to the server, then account B signs in on the server's own page (cookie session).
+        repository.clearServer()
+        repository.setServerUrl(serverUrl)
+        repository.beginInteractiveSignIn()
+        android.webkit.CookieManager.getInstance().setCookie(serverUrl, "session=account-b")
+        server.enqueue(MockResponse().setBody("account-b-cover"))
+
+        assertEquals("account-b-cover", repository.loadBookCover(book)?.decodeToString())
+        assertEquals("/api/v1/books/book-1/thumbnail", server.takeRequest(5, TimeUnit.SECONDS)!!.path)
+    }
+
+    @Test
+    fun coversSurviveSwitchingServerProfilesAndSigningBackIn() = runBlocking {
+        val serverUrl = server.url("/").toString().trimEnd('/')
+        val coverUrl = server.url("/api/v1/books/book-1/thumbnail").toString()
+        val book = BookSummary("library-1", "book-1", null, "Book", coverUrl = coverUrl)
+        server.enqueue(jsonResponse("""{"accessToken":"token-1"}"""))
+        repository.login("reader", "secret")
+        server.takeRequest(5, TimeUnit.SECONDS)!!
+        server.enqueue(MockResponse().setBody("profile-cover"))
+        assertEquals("profile-cover", repository.loadBookCover(book)?.decodeToString())
+        server.takeRequest(5, TimeUnit.SECONDS)!!
+
+        // Switching to another server profile and back goes through clearServer().
+        repository.clearServer()
+        repository.setServerUrl(serverUrl)
+        server.enqueue(jsonResponse("""{"accessToken":"token-2"}"""))
+        repository.login("Reader", "secret")
+        server.takeRequest(5, TimeUnit.SECONDS)!!
+
+        goOffline()
+        assertEquals("profile-cover", repository.loadBookCover(book)?.decodeToString())
+    }
+
+    @Test
+    fun downloadedBooksUseTheirOwnCoverWhenTheServerIsUnreachable() = runBlocking {
+        server.enqueue(jsonResponse("""{"accessToken":"token-1"}"""))
+        repository.login("reader", "secret")
+        server.takeRequest(5, TimeUnit.SECONDS)!!
+        val comic = File(context.cacheDir, "offline-cover-${System.nanoTime()}.cbz")
+        val epub = File(context.cacheDir, "offline-cover-${System.nanoTime()}.epub")
+        try {
+            java.util.zip.ZipOutputStream(comic.outputStream()).use { zip ->
+                listOf("page-10.png" to android.graphics.Color.BLUE, "page-2.png" to android.graphics.Color.RED)
+                    .forEach { (name, color) ->
+                        zip.putNextEntry(java.util.zip.ZipEntry(name))
+                        zip.write(solidPng(color))
+                        zip.closeEntry()
+                    }
+            }
+            java.util.zip.ZipOutputStream(epub.outputStream()).use { zip ->
+                fun put(name: String, bytes: ByteArray) {
+                    zip.putNextEntry(java.util.zip.ZipEntry(name)); zip.write(bytes); zip.closeEntry()
+                }
+                put("mimetype", "application/epub+zip".toByteArray())
+                put(
+                    "META-INF/container.xml",
+                    """<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>""".toByteArray()
+                )
+                put(
+                    "OEBPS/content.opf",
+                    ("""<package><manifest><item id="art" href="Images/art.png" media-type="image/png"/>""" +
+                        """<item id="c" href="Images/front.png" media-type="image/png" properties="cover-image"/>""" +
+                        """</manifest></package>""").toByteArray()
+                )
+                put("OEBPS/Images/art.png", solidPng(android.graphics.Color.BLUE))
+                put("OEBPS/Images/front.png", solidPng(android.graphics.Color.GREEN))
+            }
+            mapOf(comic to android.graphics.Color.RED, epub to android.graphics.Color.GREEN).forEach { (file, expected) ->
+                val book = BookSummary(
+                    "library-1",
+                    "book-${file.extension}",
+                    null,
+                    "Book",
+                    coverUrl = server.url("/api/v1/books/book-${file.extension}/thumbnail").toString(),
+                    localPath = file.absolutePath
+                )
+                goOffline()
+                val bytes = requireNotNull(repository.loadBookCover(book)) { "no cover for ${file.name}" }
+                val bitmap = requireNotNull(android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+                val pixel = bitmap.getPixel(bitmap.width / 2, bitmap.height / 2)
+                assertEquals("${file.name} red", android.graphics.Color.red(expected), android.graphics.Color.red(pixel), 40)
+                assertEquals("${file.name} green", android.graphics.Color.green(expected), android.graphics.Color.green(pixel), 40)
+                assertEquals("${file.name} blue", android.graphics.Color.blue(expected), android.graphics.Color.blue(pixel), 40)
+            }
+        } finally {
+            comic.delete()
+            epub.delete()
+        }
+    }
+
+    private fun assertEquals(message: String, expected: Int, actual: Int, tolerance: Int) {
+        assertTrue("$message: expected $expected±$tolerance, got $actual", kotlin.math.abs(expected - actual) <= tolerance)
+    }
+
+    private fun solidPng(color: Int): ByteArray = ByteArrayOutputStream().use { out ->
+        android.graphics.Bitmap.createBitmap(300, 400, android.graphics.Bitmap.Config.ARGB_8888).apply {
+            eraseColor(color)
+            compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            recycle()
+        }
+        out.toByteArray()
     }
 
     private fun jsonResponse(body: String): MockResponse = MockResponse()
