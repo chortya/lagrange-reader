@@ -905,10 +905,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         )
         twoPageSpreadActive = computeTwoPageSpread()
         windowTracker.start()
-        lifecycleScope.launch {
-            windowTracker.spreadChanges { computeTwoPageSpread() }
-                .collect { recreateIfSpreadChanged() }
-        }
+        windowTracker.observeSpreadChanges({ computeTwoPageSpread() }) { recreateIfSpreadChanged() }
         configureSystemBars()
         createReaderViews()
         bindTtsService()

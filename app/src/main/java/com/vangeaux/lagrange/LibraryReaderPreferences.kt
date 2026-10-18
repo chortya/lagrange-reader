@@ -66,9 +66,7 @@ data class LibraryReaderPreferences(
     val invertPdfColors: Boolean = false,
     val comicLayoutMode: ReaderLayoutMode = ReaderLayoutMode.PAGINATED,
     val comicPageGapDp: Float = DEFAULT_READER_PAGE_GAP_DP,
-    val twoPageSpread: ReaderSpreadMode = ReaderSpreadMode.AUTO,
-    val comicSpreadCoverAlone: Boolean = true,
-    val comicSpreadShift: Boolean = false
+    val twoPageSpread: ReaderSpreadMode = ReaderSpreadMode.AUTO
 ) {
     fun normalized(): LibraryReaderPreferences = copy(
         fontScale = fontScale.coerceIn(MIN_EPUB_FONT_SCALE, MAX_EPUB_FONT_SCALE),
@@ -184,8 +182,6 @@ private fun libraryReaderPreferenceStorageValue(value: LibraryReaderPreferences)
             put("comicLayout", readerLayoutModeStorageValue(normalized.comicLayoutMode))
             put("comicPageGapDp", normalized.comicPageGapDp.toDouble())
             put("twoPageSpread", readerSpreadModeStorageValue(normalized.twoPageSpread))
-            put("comicSpreadCoverAlone", normalized.comicSpreadCoverAlone)
-            put("comicSpreadShift", normalized.comicSpreadShift)
         }
     }
 
@@ -245,9 +241,7 @@ internal fun libraryReaderPreferencesFromStorage(value: String?): Map<String, Li
                             "comicPageGapDp",
                             DEFAULT_READER_PAGE_GAP_DP.toDouble()
                         ).toFloat(),
-                        twoPageSpread = readerSpreadModeFromStorage(item.optString("twoPageSpread")),
-                        comicSpreadCoverAlone = item.optBoolean("comicSpreadCoverAlone", true),
-                        comicSpreadShift = item.optBoolean("comicSpreadShift", false)
+                        twoPageSpread = readerSpreadModeFromStorage(item.optString("twoPageSpread"))
                     ).normalized()
                 }.getOrNull()?.let { decoded -> put(libraryId, decoded) }
             }
