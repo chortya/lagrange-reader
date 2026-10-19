@@ -138,6 +138,19 @@ internal class CatalogImageRequestScope(
         sameLogicalSession(other) && credentialScopeId == other.credentialScopeId
 }
 
+/** Browser state for offline use when only downloaded books are available. */
+internal fun offlineDownloadsBrowserState(serverUrl: String, books: List<BookSummary>): BrowserState? =
+    books.takeIf { it.isNotEmpty() }?.let { localBooks ->
+        BrowserState(
+            serverUrl = serverUrl,
+            libraries = emptyList(),
+            selectedLibraryId = null,
+            books = localBooks,
+            homeBooks = localBooks,
+            isCatalogComplete = true
+        )
+    }
+
 internal const val catalogImageAnonymousAccountScope = "anonymous"
 
 internal fun catalogImageAccountCacheScopeId(
@@ -2084,7 +2097,10 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
 
     override suspend fun loadCachedBrowserState(libraryId: String?): BrowserState? = withContext(Dispatchers.IO) {
         val serverUrl = getServerUrl().orEmpty()
-        val snapshot = browserSnapshotStore.read(serverUrl) ?: return@withContext null
+        val snapshot = browserSnapshotStore.read(serverUrl)
+            // No catalog snapshot (never synced, or cleared): downloaded books are still readable,
+            // so offer them instead of a login screen that cannot reach the server.
+            ?: return@withContext offlineDownloadsBrowserState(serverUrl, loadLocalBooks())
         rememberLibraryCoverAspectRatios(snapshot.libraries)
         val downloads = downloadStore.readAll(serverUrl).associateBy { it.fileId }
         val selectedLibraryId = resolveSelectedLibraryId(

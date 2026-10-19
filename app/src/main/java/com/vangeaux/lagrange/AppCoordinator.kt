@@ -611,6 +611,14 @@ class AppCoordinator internal constructor(
 
     fun saveServer(serverUrl: String, serverName: String = "", providerId: String = PROVIDER_BOOKORBIT) {
         scope.launch {
+            val currentServerUrl = (serverSelectionModule()?.getServerUrl() ?: repository.getServerUrl()).orEmpty()
+            if (currentServerUrl.isNotBlank()) {
+                // A server is still configured (e.g. a switch that failed its reachability check):
+                // go through the full switch so its session and state are cleared before another
+                // server is used, instead of carrying its credentials over.
+                changeServer(serverUrl, providerId, serverName)
+                return@launch
+            }
             val targetRepository = repositoryResolver?.invoke(serverUrl, providerId, repository) ?: repository
             serverSetupFailure(serverUrl, targetRepository.checkServer(serverUrl), providerId, serverName)?.let { failure ->
                 _screen.value = failure
@@ -637,12 +645,34 @@ class AppCoordinator internal constructor(
 
     fun changeServer(serverUrl: String, providerId: String = PROVIDER_BOOKORBIT, serverName: String = "") {
         scope.launch {
-            acceptAudioProgress = false
+            val oldServerUrl = (serverSelectionModule()?.getServerUrl() ?: repository.getServerUrl()).orEmpty()
+            val oldProviderId = serverProfileStore?.active()?.providerId ?: PROVIDER_BOOKORBIT
+            if (oldServerUrl.isNotBlank() && serverUrlsMatch(oldServerUrl, serverUrl) && oldProviderId == providerId) {
+                // Already on this server (e.g. tapping it on the login screen while offline):
+                // reconnect with the usual offline fallback. Switching would clear its session,
+                // caches and unsynced progress before the server is even reachable.
+                bootstrap()
+                return@launch
+            }
             // Remove the old provider's browser composition immediately. Keeping the
             // old Browser screen mounted while the target is validated lets stale
             // catalog/local-book state remain visible during the switch.
             _screen.value = AppScreen.Startup("Switching server…")
-            val oldServerUrl = (serverSelectionModule()?.getServerUrl() ?: repository.getServerUrl()).orEmpty()
+            // Validate the target before touching the current server's state: an unreachable
+            // or mistyped server must leave the current session, caches and queues intact.
+            val targetRepository = repositoryResolver?.invoke(serverUrl, providerId, repository) ?: repository
+            val checkResult = targetRepository.checkServer(serverUrl)
+            val setupFailure = serverSetupFailure(serverUrl, checkResult, providerId, serverName)
+            // With no server configured, a saved profile that is merely unreachable (offline) is
+            // still restored, so its downloads and offline library are usable without a network.
+            val restoreOffline = setupFailure != null && oldServerUrl.isBlank() &&
+                checkResult.isConnectivityFailure() &&
+                serverProfileStore?.readAll()?.any { serverUrlsMatch(it.serverUrl, serverUrl) } == true
+            if (setupFailure != null && !restoreOffline) {
+                _screen.value = setupFailure
+                return@launch
+            }
+            acceptAudioProgress = false
             // Give the current provider one last authenticated request before its
             // profile session is persisted. BookOrbit can renew an expired access
             // token from this request; saving first would preserve the stale token
@@ -655,11 +685,6 @@ class AppCoordinator internal constructor(
             allowCachedLoginFallback = false
             sessionHistoryStore?.clearServer(oldServerUrl)
             serverSelectionModule()?.clearServer() ?: repository.clearServer()
-            val targetRepository = repositoryResolver?.invoke(serverUrl, providerId, repository) ?: repository
-            serverSetupFailure(serverUrl, targetRepository.checkServer(serverUrl), providerId, serverName)?.let { failure ->
-                _screen.value = failure
-                return@launch
-            }
             repository = targetRepository
             targetRepository.setServerUrl(serverUrl)
             audioPlaybackReconfigurer?.invoke(repository)
@@ -672,6 +697,16 @@ class AppCoordinator internal constructor(
                     lastUsedAtMillis = System.currentTimeMillis()
                 )
             )
+            if (restoreOffline) {
+                // Startup restores the profile session and falls back to offline content; this is
+                // the user's own saved profile, so its offline library may be shown.
+                allowCachedLoginFallback = true
+                // The account transition is complete; offline startup never reaches loadBrowser(),
+                // which is otherwise what re-enables progress reporting.
+                acceptAudioProgress = true
+                bootstrap()
+                return@launch
+            }
             val restoredProfileSession = providerSessionModule()?.restoreCurrentProfileSession() == true
             val restoredSessionState = if (restoredProfileSession) {
                 repository.getSessionState()
@@ -2674,6 +2709,11 @@ class AppCoordinator internal constructor(
             _screen.value = AppScreen.Startup(message)
         }
     }
+
+    private fun ServerCheckResult.isConnectivityFailure(): Boolean =
+        this == ServerCheckResult.UnreachableHost ||
+            this == ServerCheckResult.Timeout ||
+            this == ServerCheckResult.NetworkFailure
 
     private fun serverSetupFailure(
         serverUrl: String,
