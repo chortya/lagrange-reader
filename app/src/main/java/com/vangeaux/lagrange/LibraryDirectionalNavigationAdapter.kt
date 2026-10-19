@@ -1,6 +1,7 @@
 package com.vangeaux.lagrange
 
 import org.readium.r2.navigator.OverflowableNavigator
+import org.readium.r2.navigator.input.DragEvent
 import org.readium.r2.navigator.input.InputListener
 import org.readium.r2.navigator.input.TapEvent
 import org.readium.r2.shared.ExperimentalReadiumApi
@@ -13,7 +14,7 @@ internal class LibraryDirectionalNavigationAdapter(
     private val tapZoneLayout: () -> ReaderTapZoneLayout = { ReaderTapZoneLayout.CURRENT_EDGES },
     private val tapZoneInvertMode: () -> ReaderTapZoneInvertMode = { ReaderTapZoneInvertMode.NONE },
     private val onMenu: () -> Unit = {},
-    /** Called before a tap-zone page turn, which is always a deliberate move by the reader. */
+    /** Called before a tap-zone page turn and when a swipe starts: deliberate moves by the reader. */
     private val onPageTurn: () -> Unit = {},
     private val animatedTransition: Boolean = true
 ) : InputListener {
@@ -44,5 +45,11 @@ internal class LibraryDirectionalNavigationAdapter(
                 true
             }
         }
+    }
+
+    override fun onDrag(event: DragEvent): Boolean {
+        if (event.type == DragEvent.Type.Start) onPageTurn()
+        // Observed only: the navigator still performs the swipe itself.
+        return false
     }
 }
