@@ -3102,6 +3102,8 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
 
     override fun onStop() {
         if (!isChangingConfigurations) stoppedSinceLastStart = true
+        // Background read-aloud owns the position again; the next start catches up afresh.
+        endForegroundSync()
         if (
             shouldPauseEpubReadingSessionOnStop(
                 isChangingConfigurations = isChangingConfigurations,

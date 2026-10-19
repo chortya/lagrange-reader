@@ -180,6 +180,31 @@ class EpubPositionRestoreInstrumentedTest {
     }
 
     @Test
+    fun stoppingAgainWhileCatchingUpLeavesTheBackgroundPositionAlone() {
+        launch().use { scenario ->
+            val opened = awaitStoredHref("reader did not open on chapter 1") { it.endsWith("chapter-1.xhtml") }
+            scenario.moveToState(Lifecycle.State.CREATED)
+            simulateBackgroundReadAloudReaching(opened.href.toString().replace("chapter-1.xhtml", "chapter-2.xhtml"))
+            scenario.onActivity { it.holdForegroundSyncNavigationForTest = true }
+            scenario.moveToState(Lifecycle.State.RESUMED)
+            scenario.onActivity { assertTrue(it.isForegroundSyncPendingForTest()) }
+
+            // Back to the background before catching up; read-aloud carries on meanwhile.
+            scenario.moveToState(Lifecycle.State.CREATED)
+            scenario.onActivity { assertTrue("stopping ends the catch-up", !it.isForegroundSyncPendingForTest()) }
+            val later = simulateBackgroundReadAloudReaching(
+                opened.href.toString().replace("chapter-1.xhtml", "chapter-3.xhtml")
+            )
+            // Past the catch-up window: nothing may record the stale visual page while stopped.
+            SystemClock.sleep(FOREGROUND_SYNC_TIMEOUT_MILLIS + 1_000)
+            assertEquals(
+                later.href.toString(),
+                requireNotNull(ReadiumEpubLocatorStore(context).read(readerKey)).href.toString()
+            )
+        }
+    }
+
+    @Test
     fun aRealMoveWhileCatchingUpIsStillRecorded() {
         launch().use { scenario ->
             val opened = awaitStoredHref("reader did not open on chapter 1") { it.endsWith("chapter-1.xhtml") }
