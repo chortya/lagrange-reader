@@ -89,6 +89,13 @@ private object CatalogImageCoordinator {
     val requestLocks = Array(CATALOG_IMAGE_REQUEST_LOCK_COUNT) { Mutex() }
     val memoryCache = LinkedHashMap<String, ByteArray>(32, 0.75f, true)
     var memoryCacheBytes = 0L
+    /**
+     * An interactive (server page) sign-in has started and not authenticated yet. The previous
+     * account's token or cookies may still be present, so no cover request may create or use a cache
+     * scope until the new account is known.
+     */
+    @Volatile
+    var interactiveSignInPending = false
 }
 
 internal class CatalogImageRequestScope(
@@ -347,6 +354,8 @@ internal fun extractAccessToken(payload: String): String? {
 interface BookOrbitDataSource {
     /** An interactive sign-in (server sign-in page) is starting; its account is not known yet. */
     suspend fun beginInteractiveSignIn() {}
+    /** The interactive sign-in started by [beginInteractiveSignIn] has authenticated. */
+    suspend fun completeInteractiveSignIn() {}
     suspend fun getServerUrl(): String?
     suspend fun setServerUrl(serverUrl: String)
     suspend fun clearServer()
@@ -631,6 +640,7 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
         requestUrl: String? = null
     ): CatalogImageRequestScope {
             val generation = CatalogImageCoordinator.generation.get()
+            if (CatalogImageCoordinator.interactiveSignInPending) throw StaleCatalogImageRequestException()
             val preferences = context.dataStore.data.first()
             val serverUrl = preferences[Keys.SERVER_URL].orEmpty()
             val profileId = ServerProfileStore(context).active()?.id
@@ -758,12 +768,20 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
         // profile; forget the cover-cache account so it starts fresh on first authenticated use.
         mutateCatalogImageSession {
             catalogImageAccountScopeStore.clear(currentProfileId() ?: getServerUrl().orEmpty())
+            // Until the new account has signed in, the old credentials must not create its scope.
+            CatalogImageCoordinator.interactiveSignInPending = true
         }
+    }
+
+    override suspend fun completeInteractiveSignIn() {
+        // The next cover request creates a fresh scope with the new account's credentials.
+        mutateCatalogImageSession { CatalogImageCoordinator.interactiveSignInPending = false }
     }
 
     override suspend fun clearSession() {
         mutateCatalogImageSession(clearDiskCacheAfter = true) {
             catalogImageAccountScopeStore.clear(currentProfileId() ?: getServerUrl().orEmpty())
+            CatalogImageCoordinator.interactiveSignInPending = false
             clearRuntimeSession()
             currentProfileId()?.let(profileSessionStore::clear)
         }
@@ -900,6 +918,7 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
                 currentProfileId() ?: serverUrl,
                 catalogImageUserAccountScope(serverUrl, username)
             )
+            CatalogImageCoordinator.interactiveSignInPending = false
         }
     }
 
@@ -950,6 +969,7 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
                 currentProfileId() ?: getServerUrl().orEmpty(),
                 "oidc:" + java.util.UUID.randomUUID()
             )
+            CatalogImageCoordinator.interactiveSignInPending = false
         }
     }
 

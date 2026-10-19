@@ -929,10 +929,44 @@ class BookOrbitRepositoryIntegrationTest {
         repository.setServerUrl(serverUrl)
         repository.beginInteractiveSignIn()
         android.webkit.CookieManager.getInstance().setCookie(serverUrl, "session=account-b")
+        repository.completeInteractiveSignIn()
         server.enqueue(MockResponse().setBody("account-b-cover"))
 
         assertEquals("account-b-cover", repository.loadBookCover(book)?.decodeToString())
         assertEquals("/api/v1/books/book-1/thumbnail", server.takeRequest(5, TimeUnit.SECONDS)!!.path)
+    }
+
+    @Test
+    fun coverRequestDuringServerSignInCannotUseTheOldAccount() = runBlocking {
+        val serverUrl = server.url("/").toString().trimEnd('/')
+        val coverUrl = server.url("/api/v1/books/book-1/thumbnail").toString()
+        val book = BookSummary("library-1", "book-1", null, "Book", coverUrl = coverUrl)
+        server.enqueue(jsonResponse("""{"accessToken":"account-a"}"""))
+        repository.login("account-a", "secret")
+        server.takeRequest(5, TimeUnit.SECONDS)!!
+        // Covers are served per account: B's session cookie gets B's cover.
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (request.getHeader("Cookie").orEmpty().contains("account-b")) {
+                    MockResponse().setBody("account-b-cover")
+                } else {
+                    MockResponse().setBody("account-a-cover")
+                }
+        }
+
+        // Account B opens the server sign-in page while account A's token is still stored.
+        repository.beginInteractiveSignIn()
+        assertEquals(null, runCatching { repository.loadBookCover(book) }.getOrNull())
+        assertEquals(
+            "no cover request may go out with the old account's credentials",
+            null,
+            server.takeRequest(1, TimeUnit.SECONDS)
+        )
+
+        // B finishes signing in: its cover comes from the server, not from a scope A filled.
+        android.webkit.CookieManager.getInstance().setCookie(serverUrl, "session=account-b")
+        repository.completeInteractiveSignIn()
+        assertEquals("account-b-cover", repository.loadBookCover(book)?.decodeToString())
     }
 
     @Test

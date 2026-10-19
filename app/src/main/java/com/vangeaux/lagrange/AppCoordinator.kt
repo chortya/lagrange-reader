@@ -1024,6 +1024,7 @@ class AppCoordinator internal constructor(
                         break
                     }
                     if ((loginModule()?.getSessionState() ?: repository.getSessionState()) == SessionState.Authenticated) {
+                        runCatching { repository.completeInteractiveSignIn() }
                         allowCachedLoginFallback = true
                         resumeAfterLogin()
                         break
