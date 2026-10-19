@@ -112,4 +112,22 @@ class OfflineServerSwitchInstrumentedTest {
         val browser = (screen as AppScreen.Browser).browserState
         assertTrue(browser.homeBooks.any { it.id == "book-1" && it.localPath == book.absolutePath })
     }
+
+    @Test
+    fun anotherProviderAtTheSavedAddressIsNotRestoredOffline() = runBlocking<Unit> {
+        repository.clearServer()
+        val coordinator = coordinator()
+        // The saved profile is BookOrbit; the user picks the same address as a Komga server.
+        coordinator.changeServer(serverUrl, providerId = PROVIDER_KOMGA)
+
+        val screen = awaitScreen(coordinator, "the switch did not settle on server setup") {
+            it is AppScreen.ServerSetup
+        }
+        assertTrue("another provider must not open this profile's offline library: $screen", screen !is AppScreen.Browser)
+        assertEquals(
+            "the saved profile keeps its provider",
+            PROVIDER_BOOKORBIT,
+            profiles.readAll().single { it.id == serverProfileId(serverUrl) }.providerId
+        )
+    }
 }

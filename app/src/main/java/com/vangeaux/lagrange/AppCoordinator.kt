@@ -665,9 +665,13 @@ class AppCoordinator internal constructor(
             val setupFailure = serverSetupFailure(serverUrl, checkResult, providerId, serverName)
             // With no server configured, a saved profile that is merely unreachable (offline) is
             // still restored, so its downloads and offline library are usable without a network.
+            // The provider must match too: another provider at the same address must not take over
+            // that profile's session and cached state.
             val restoreOffline = setupFailure != null && oldServerUrl.isBlank() &&
                 checkResult.isConnectivityFailure() &&
-                serverProfileStore?.readAll()?.any { serverUrlsMatch(it.serverUrl, serverUrl) } == true
+                serverProfileStore?.readAll()?.any {
+                    serverUrlsMatch(it.serverUrl, serverUrl) && it.providerId == providerId
+                } == true
             if (setupFailure != null && !restoreOffline) {
                 _screen.value = setupFailure
                 return@launch
