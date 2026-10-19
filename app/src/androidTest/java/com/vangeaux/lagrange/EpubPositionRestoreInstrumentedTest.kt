@@ -132,6 +132,58 @@ class EpubPositionRestoreInstrumentedTest {
     }
 
     @Test
+    fun aRepaginatedReReportOfTheOldPageDoesNotReplaceNewerReadAloudProgress() {
+        launch().use { scenario ->
+            val opened = awaitStoredHref("reader did not open on chapter 1") { it.endsWith("chapter-1.xhtml") }
+
+            scenario.moveToState(Lifecycle.State.CREATED)
+            val later = simulateBackgroundReadAloudReaching(
+                opened.href.toString().replace("chapter-1.xhtml", "chapter-3.xhtml")
+            )
+            scenario.moveToState(Lifecycle.State.RESUMED)
+            // Readium re-paginates and reports the page the reader showed before, with slightly
+            // different progression, fragment and position details.
+            val stale = requireNotNull(
+                Locator.fromJSON(
+                    JSONObject(opened.toJSON().toString()).apply {
+                        put("href", "${opened.href}#p2")
+                        getJSONObject("locations").apply {
+                            put("progression", (opened.locations.progression ?: 0.0) + 0.002)
+                            put("position", (opened.locations.position ?: 1) + 1)
+                        }
+                    }
+                )
+            )
+            scenario.onActivity { it.recordVisualLocatorForTest(stale) }
+            SystemClock.sleep(2000)
+
+            val stored = requireNotNull(ReadiumEpubLocatorStore(context).read(readerKey))
+            assertEquals(
+                "a stale visual re-report must not replace the newer read-aloud position",
+                later.href.removeFragment().toString(),
+                stored.href.removeFragment().toString()
+            )
+        }
+    }
+
+    @Test
+    fun catchingUpWithBackgroundProgressAcceptsOnlyReportsCloserToIt() {
+        val stalePage = locatorJson("""{"href":"a.xhtml","type":"application/xhtml+xml","locations":{"progression":0.20}}""")
+        val target = locatorJson("""{"href":"a.xhtml","type":"application/xhtml+xml","locations":{"progression":0.60}}""")
+        val reReport = locatorJson("""{"href":"a.xhtml#p2","type":"application/xhtml+xml","locations":{"progression":0.21,"position":5}}""")
+        val arrived = locatorJson("""{"href":"a.xhtml","type":"application/xhtml+xml","locations":{"progression":0.58}}""")
+        val otherChapter = locatorJson("""{"href":"b.xhtml","type":"application/xhtml+xml","locations":{"progression":0.6}}""")
+        val laterChapter = locatorJson("""{"href":"c.xhtml","type":"application/xhtml+xml","locations":{"progression":0.5}}""")
+
+        assertTrue("re-report of the stale page", !isForegroundSyncArrival(stalePage, target, reReport))
+        assertTrue(isForegroundSyncArrival(stalePage, target, arrived))
+        assertTrue("not the target resource", !isForegroundSyncArrival(stalePage, target, otherChapter))
+        // Read-aloud moved to another resource: any report there is the arrival.
+        assertTrue(isForegroundSyncArrival(stalePage, laterChapter, laterChapter))
+        assertTrue(!isForegroundSyncArrival(stalePage, laterChapter, reReport))
+    }
+
+    @Test
     fun anOldReadAloudPositionDoesNotPullTheReaderBackWhenItIsRebuilt() {
         val chapter1 = "OEBPS/Text/chapter-1.xhtml"
         val chapter3 = "OEBPS/Text/chapter-3.xhtml"

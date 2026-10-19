@@ -13,6 +13,7 @@ import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -644,6 +645,11 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
     private var publication: Publication? = null
     private var navigator: EpubNavigatorFragment? = null
     private var lastRecordedVisualLocator: Locator? = null
+    // Newer position written while the reader was stopped (by background read-aloud), until the
+    // visual navigator reaches it; with its deadline.
+    private var foregroundSyncTarget: Locator? = null
+    private var foregroundSyncDeadline = 0L
+    private var stoppedSinceLastStart = false
     private var progressView: ProgressBar? = null
     private val readerContainerId: Int = R.id.readium_reader_container
     private lateinit var rootView: FrameLayout
@@ -2712,6 +2718,11 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
      */
     private fun recordVisualLocator(locator: Locator) {
         val last = lastRecordedVisualLocator
+        foregroundSyncTarget?.let { target ->
+            val expired = SystemClock.elapsedRealtime() > foregroundSyncDeadline
+            if (!expired && !isForegroundSyncArrival(last, target, locator)) return
+            foregroundSyncTarget = null
+        }
         if (!shouldRecordVisualLocator(last, locator)) {
             if (last == null || locator == last) return
             val storedElsewhere = !isPreview && last.let { mine ->
@@ -3023,7 +3034,36 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
 
     private fun dpToPx(dp: Int): Int = (dp * resources.displayMetrics.density).toInt()
 
+    override fun onStart() {
+        super.onStart()
+        if (stoppedSinceLastStart) {
+            stoppedSinceLastStart = false
+            syncToPositionSavedWhileStopped()
+        }
+    }
+
+    /**
+     * Background read-aloud keeps saving its position while the reader is stopped. On return the
+     * visual navigator still shows the old page, and Readium may re-report it after re-paginating
+     * with slightly different details. Show the newer position instead, and ignore re-reports of
+     * the old page until the navigator gets there (bounded, so real moves are never lost for long).
+     */
+    private fun syncToPositionSavedWhileStopped() {
+        if (isPreview) return
+        val last = lastRecordedVisualLocator ?: return
+        val storedJson = locatorStore.readJson(readerKey) ?: return
+        if (storedJson == last.toJSON().toString()) return
+        val stored = locatorStore.read(readerKey) ?: return
+        foregroundSyncTarget = stored
+        foregroundSyncDeadline = SystemClock.elapsedRealtime() + FOREGROUND_SYNC_TIMEOUT_MILLIS
+        navigator?.go(stored)
+    }
+
+    /** Feeds a visual-navigator position report through the recording rules; for instrumented tests. */
+    internal fun recordVisualLocatorForTest(locator: Locator) = recordVisualLocator(locator)
+
     override fun onStop() {
+        if (!isChangingConfigurations) stoppedSinceLastStart = true
         if (
             shouldPauseEpubReadingSessionOnStop(
                 isChangingConfigurations = isChangingConfigurations,
@@ -3202,6 +3242,26 @@ internal fun closeEpubReaderPlayback(
  * different progression within it. Readium re-reports the same place on resume, sometimes enriched
  * with `position`/`totalProgression` once positions are computed; that is not a move.
  */
+internal const val FOREGROUND_SYNC_TIMEOUT_MILLIS = 5_000L
+
+/**
+ * While the reader catches up with a position saved in the background ([target]), a visual report
+ * counts only once it reaches the target's resource and is nearer the target than the stale position
+ * the reader was showing ([lastRecorded]). A re-report of the stale page never is.
+ */
+internal fun isForegroundSyncArrival(lastRecorded: Locator?, target: Locator, current: Locator): Boolean {
+    fun Locator.resource() = href.removeFragment().toString()
+    if (current.resource() != target.resource()) return false
+    val last = lastRecorded ?: return true
+    if (last.resource() != target.resource()) return true
+    val targetProgression = target.locations.progression ?: return true
+    val currentProgression = current.locations.progression ?: return false
+    val lastProgression = last.locations.progression ?: return true
+    // Nearer the target than the stale page: re-pagination only nudges the stale page a little.
+    return kotlin.math.abs(currentProgression - targetProgression) <
+        kotlin.math.abs(currentProgression - lastProgression)
+}
+
 internal fun shouldRecordVisualLocator(lastRecorded: Locator?, current: Locator): Boolean {
     val last = lastRecorded ?: return true
     if (last.href.removeFragment().toString() != current.href.removeFragment().toString()) return true
