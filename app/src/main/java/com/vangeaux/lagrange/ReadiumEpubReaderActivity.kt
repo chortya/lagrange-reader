@@ -1294,7 +1294,8 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
                 readingDirection = { readingDirection },
                 tapZoneLayout = { readerPreferences.tapZoneLayout },
                 tapZoneInvertMode = { readerPreferences.tapZoneInvertMode },
-                onMenu = ::toggleChrome
+                onMenu = ::toggleChrome,
+                onPageTurn = ::endForegroundSync
             )
         )
         navigator = fragment
@@ -3066,20 +3067,26 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
             delay(FOREGROUND_SYNC_TIMEOUT_MILLIS)
             expireForegroundSync()
         }
-        navigator?.go(stored)
+        if (!holdForegroundSyncNavigationForTest) navigator?.go(stored)
+    }
+
+    /** Test barrier: catch-up starts but does not navigate until [releaseForegroundSyncNavigationForTest]. */
+    internal var holdForegroundSyncNavigationForTest = false
+
+    internal fun releaseForegroundSyncNavigationForTest() {
+        holdForegroundSyncNavigationForTest = false
+        foregroundSyncTarget?.let { navigator?.go(it) }
     }
 
     /**
-     * The window has passed without the navigator reaching the newer position (for example
-     * read-aloud only moved within the page shown). Record where the reader is now, unless that is
-     * still the stale page, so a move the user made meanwhile is not lost.
+     * The window has passed without a report reaching the newer position (for example read-aloud
+     * only moved within the page shown, or the user swiped elsewhere). Any re-pagination replay is
+     * over by now, so what the navigator shows is where the reader is: record it.
      */
     private fun expireForegroundSync() {
-        val target = foregroundSyncTarget ?: return
-        val last = lastRecordedVisualLocator
+        foregroundSyncTarget ?: return
         endForegroundSync()
-        val current = navigator?.currentLocator?.value ?: return
-        if (!isStaleForegroundReReport(last, target, current)) recordVisualLocator(current)
+        navigator?.currentLocator?.value?.let(::recordVisualLocator)
     }
 
     private fun endForegroundSync() {

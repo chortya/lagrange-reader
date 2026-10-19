@@ -13,6 +13,8 @@ internal class LibraryDirectionalNavigationAdapter(
     private val tapZoneLayout: () -> ReaderTapZoneLayout = { ReaderTapZoneLayout.CURRENT_EDGES },
     private val tapZoneInvertMode: () -> ReaderTapZoneInvertMode = { ReaderTapZoneInvertMode.NONE },
     private val onMenu: () -> Unit = {},
+    /** Called before a tap-zone page turn, which is always a deliberate move by the reader. */
+    private val onPageTurn: () -> Unit = {},
     private val animatedTransition: Boolean = true
 ) : InputListener {
     override fun onTap(event: TapEvent): Boolean {
@@ -29,8 +31,14 @@ internal class LibraryDirectionalNavigationAdapter(
                 invertMode = tapZoneInvertMode()
             )
         ) {
-            ReaderTapZoneAction.PREVIOUS -> navigator.goBackward(animatedTransition)
-            ReaderTapZoneAction.NEXT -> navigator.goForward(animatedTransition)
+            ReaderTapZoneAction.PREVIOUS -> {
+                onPageTurn()
+                navigator.goBackward(animatedTransition)
+            }
+            ReaderTapZoneAction.NEXT -> {
+                onPageTurn()
+                navigator.goForward(animatedTransition)
+            }
             ReaderTapZoneAction.MENU -> {
                 onMenu()
                 true

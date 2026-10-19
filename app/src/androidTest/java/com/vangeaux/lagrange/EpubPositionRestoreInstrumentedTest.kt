@@ -140,6 +140,8 @@ class EpubPositionRestoreInstrumentedTest {
             val later = simulateBackgroundReadAloudReaching(
                 opened.href.toString().replace("chapter-1.xhtml", "chapter-3.xhtml")
             )
+            // Hold the catch-up navigation so the replayed report deterministically comes first.
+            scenario.onActivity { it.holdForegroundSyncNavigationForTest = true }
             scenario.moveToState(Lifecycle.State.RESUMED)
             // Readium re-paginates and reports the page the reader showed before, with slightly
             // different progression, fragment and position details.
@@ -155,9 +157,14 @@ class EpubPositionRestoreInstrumentedTest {
                 )
             )
             scenario.onActivity { activity ->
-                // Injected while the reader is still catching up, as Readium's replay would be.
                 assertTrue("sync must still be pending", activity.isForegroundSyncPendingForTest())
                 activity.recordVisualLocatorForTest(stale)
+                assertEquals(
+                    "the replayed old page must not be recorded",
+                    later.href.toString(),
+                    requireNotNull(ReadiumEpubLocatorStore(context).read(readerKey)).href.toString()
+                )
+                activity.releaseForegroundSyncNavigationForTest()
             }
             SystemClock.sleep(2000)
 
@@ -178,6 +185,7 @@ class EpubPositionRestoreInstrumentedTest {
             val opened = awaitStoredHref("reader did not open on chapter 1") { it.endsWith("chapter-1.xhtml") }
             scenario.moveToState(Lifecycle.State.CREATED)
             simulateBackgroundReadAloudReaching(opened.href.toString().replace("chapter-1.xhtml", "chapter-3.xhtml"))
+            scenario.onActivity { it.holdForegroundSyncNavigationForTest = true }
             scenario.moveToState(Lifecycle.State.RESUMED)
 
             val elsewhere = requireNotNull(
