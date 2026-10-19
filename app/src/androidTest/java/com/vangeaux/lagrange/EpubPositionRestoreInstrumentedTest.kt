@@ -154,7 +154,11 @@ class EpubPositionRestoreInstrumentedTest {
                     }
                 )
             )
-            scenario.onActivity { it.recordVisualLocatorForTest(stale) }
+            scenario.onActivity { activity ->
+                // Injected while the reader is still catching up, as Readium's replay would be.
+                assertTrue("sync must still be pending", activity.isForegroundSyncPendingForTest())
+                activity.recordVisualLocatorForTest(stale)
+            }
             SystemClock.sleep(2000)
 
             val stored = requireNotNull(ReadiumEpubLocatorStore(context).read(readerKey))
@@ -163,11 +167,41 @@ class EpubPositionRestoreInstrumentedTest {
                 later.href.removeFragment().toString(),
                 stored.href.removeFragment().toString()
             )
+            // The reader itself caught up: the navigator now shows the newer position.
+            scenario.onActivity { activity -> assertTrue(!activity.isForegroundSyncPendingForTest()) }
         }
     }
 
     @Test
-    fun catchingUpWithBackgroundProgressAcceptsOnlyReportsCloserToIt() {
+    fun aRealMoveWhileCatchingUpIsStillRecorded() {
+        launch().use { scenario ->
+            val opened = awaitStoredHref("reader did not open on chapter 1") { it.endsWith("chapter-1.xhtml") }
+            scenario.moveToState(Lifecycle.State.CREATED)
+            simulateBackgroundReadAloudReaching(opened.href.toString().replace("chapter-1.xhtml", "chapter-3.xhtml"))
+            scenario.moveToState(Lifecycle.State.RESUMED)
+
+            val elsewhere = requireNotNull(
+                Locator.fromJSON(
+                    JSONObject(opened.toJSON().toString()).put(
+                        "href",
+                        opened.href.toString().replace("chapter-1.xhtml", "chapter-2.xhtml")
+                    )
+                )
+            )
+            scenario.onActivity { activity ->
+                assertTrue("sync must still be pending", activity.isForegroundSyncPendingForTest())
+                activity.recordVisualLocatorForTest(elsewhere)
+                assertTrue("a real move ends the catch-up", !activity.isForegroundSyncPendingForTest())
+            }
+            assertEquals(
+                elsewhere.href.toString(),
+                requireNotNull(ReadiumEpubLocatorStore(context).read(readerKey)).href.toString()
+            )
+        }
+    }
+
+    @Test
+    fun onlyReReportsOfTheStalePageAreIgnoredWhileCatchingUp() {
         val stalePage = locatorJson("""{"href":"a.xhtml","type":"application/xhtml+xml","locations":{"progression":0.20}}""")
         val target = locatorJson("""{"href":"a.xhtml","type":"application/xhtml+xml","locations":{"progression":0.60}}""")
         val reReport = locatorJson("""{"href":"a.xhtml#p2","type":"application/xhtml+xml","locations":{"progression":0.21,"position":5}}""")
@@ -175,12 +209,13 @@ class EpubPositionRestoreInstrumentedTest {
         val otherChapter = locatorJson("""{"href":"b.xhtml","type":"application/xhtml+xml","locations":{"progression":0.6}}""")
         val laterChapter = locatorJson("""{"href":"c.xhtml","type":"application/xhtml+xml","locations":{"progression":0.5}}""")
 
-        assertTrue("re-report of the stale page", !isForegroundSyncArrival(stalePage, target, reReport))
-        assertTrue(isForegroundSyncArrival(stalePage, target, arrived))
-        assertTrue("not the target resource", !isForegroundSyncArrival(stalePage, target, otherChapter))
-        // Read-aloud moved to another resource: any report there is the arrival.
-        assertTrue(isForegroundSyncArrival(stalePage, laterChapter, laterChapter))
-        assertTrue(!isForegroundSyncArrival(stalePage, laterChapter, reReport))
+        assertTrue("re-report of the stale page", isStaleForegroundReReport(stalePage, target, reReport))
+        assertTrue("arrival", !isStaleForegroundReReport(stalePage, target, arrived))
+        assertTrue("a chapter the user went to", !isStaleForegroundReReport(stalePage, target, otherChapter))
+        // Read-aloud moved to another resource: the old resource is the stale one.
+        assertTrue(isStaleForegroundReReport(stalePage, laterChapter, reReport))
+        assertTrue(!isStaleForegroundReReport(stalePage, laterChapter, laterChapter))
+        assertTrue("nothing recorded yet", !isStaleForegroundReReport(null, target, reReport))
     }
 
     @Test

@@ -650,6 +650,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
     private var foregroundSyncTarget: Locator? = null
     private var foregroundSyncDeadline = 0L
     private var stoppedSinceLastStart = false
+    private var foregroundSyncTimeoutJob: Job? = null
     private var progressView: ProgressBar? = null
     private val readerContainerId: Int = R.id.readium_reader_container
     private lateinit var rootView: FrameLayout
@@ -773,6 +774,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         if (!canNavigateWithVolumeButtons()) return super.dispatchKeyEvent(event)
         if (event.action != KeyEvent.ACTION_DOWN) return true
         if (event.repeatCount > 0) return true
+        endForegroundSync()
         when (action) {
             VolumeButtonNavigationAction.PREVIOUS -> navigator?.goBackward(true)
             VolumeButtonNavigationAction.NEXT -> navigator?.goForward(true)
@@ -2720,8 +2722,8 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         val last = lastRecordedVisualLocator
         foregroundSyncTarget?.let { target ->
             val expired = SystemClock.elapsedRealtime() > foregroundSyncDeadline
-            if (!expired && !isForegroundSyncArrival(last, target, locator)) return
-            foregroundSyncTarget = null
+            if (!expired && isStaleForegroundReReport(last, target, locator)) return
+            endForegroundSync()
         }
         if (!shouldRecordVisualLocator(last, locator)) {
             if (last == null || locator == last) return
@@ -2762,11 +2764,13 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
 
     private fun goToChapter(index: Int) {
         val link = publication?.readingOrder?.getOrNull(index) ?: return
+        endForegroundSync()
         navigator?.go(link)
     }
 
     private fun goToPage(index: Int) {
         val activeNavigator = navigator ?: return
+        endForegroundSync()
         val safePageCount = currentPageCount.coerceAtLeast(1)
         val target = index.coerceIn(0, safePageCount - 1)
         val progression = if (safePageCount <= 1) 0.0 else {
@@ -2779,6 +2783,7 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
 
     private fun goToProgression(progression: Float) {
         val activeNavigator = navigator ?: return
+        endForegroundSync()
         activeNavigator.go(
             activeNavigator.currentLocator.value.copyWithLocations(
                 progression = normalizedReaderProgression(progression).toDouble()
@@ -3056,8 +3061,34 @@ class ReadiumEpubReaderActivity : FragmentActivity() {
         val stored = locatorStore.read(readerKey) ?: return
         foregroundSyncTarget = stored
         foregroundSyncDeadline = SystemClock.elapsedRealtime() + FOREGROUND_SYNC_TIMEOUT_MILLIS
+        foregroundSyncTimeoutJob?.cancel()
+        foregroundSyncTimeoutJob = lifecycleScope.launch {
+            delay(FOREGROUND_SYNC_TIMEOUT_MILLIS)
+            expireForegroundSync()
+        }
         navigator?.go(stored)
     }
+
+    /**
+     * The window has passed without the navigator reaching the newer position (for example
+     * read-aloud only moved within the page shown). Record where the reader is now, unless that is
+     * still the stale page, so a move the user made meanwhile is not lost.
+     */
+    private fun expireForegroundSync() {
+        val target = foregroundSyncTarget ?: return
+        val last = lastRecordedVisualLocator
+        endForegroundSync()
+        val current = navigator?.currentLocator?.value ?: return
+        if (!isStaleForegroundReReport(last, target, current)) recordVisualLocator(current)
+    }
+
+    private fun endForegroundSync() {
+        foregroundSyncTarget = null
+        foregroundSyncTimeoutJob?.cancel()
+        foregroundSyncTimeoutJob = null
+    }
+
+    internal fun isForegroundSyncPendingForTest(): Boolean = foregroundSyncTarget != null
 
     /** Feeds a visual-navigator position report through the recording rules; for instrumented tests. */
     internal fun recordVisualLocatorForTest(locator: Locator) = recordVisualLocator(locator)
@@ -3245,21 +3276,23 @@ internal fun closeEpubReaderPlayback(
 internal const val FOREGROUND_SYNC_TIMEOUT_MILLIS = 5_000L
 
 /**
- * While the reader catches up with a position saved in the background ([target]), a visual report
- * counts only once it reaches the target's resource and is nearer the target than the stale position
- * the reader was showing ([lastRecorded]). A re-report of the stale page never is.
+ * While the reader catches up with a position saved in the background ([target]), whether a visual
+ * report is Readium re-reporting the stale page the reader showed before ([lastRecorded]) rather
+ * than a real position: it is in the stale page's resource and either read-aloud moved on to
+ * another resource, or it is nearer the stale page than the target. Reports anywhere else, such as
+ * the target or another chapter the user went to, are real.
  */
-internal fun isForegroundSyncArrival(lastRecorded: Locator?, target: Locator, current: Locator): Boolean {
+internal fun isStaleForegroundReReport(lastRecorded: Locator?, target: Locator, current: Locator): Boolean {
     fun Locator.resource() = href.removeFragment().toString()
-    if (current.resource() != target.resource()) return false
-    val last = lastRecorded ?: return true
-    if (last.resource() != target.resource()) return true
-    val targetProgression = target.locations.progression ?: return true
+    val last = lastRecorded ?: return false
+    if (current.resource() != last.resource()) return false
+    if (target.resource() != last.resource()) return true
     val currentProgression = current.locations.progression ?: return false
-    val lastProgression = last.locations.progression ?: return true
-    // Nearer the target than the stale page: re-pagination only nudges the stale page a little.
-    return kotlin.math.abs(currentProgression - targetProgression) <
-        kotlin.math.abs(currentProgression - lastProgression)
+    val lastProgression = last.locations.progression ?: return false
+    val targetProgression = target.locations.progression ?: return false
+    // Re-pagination only nudges the stale page; a report nearer the target is the arrival.
+    return kotlin.math.abs(currentProgression - lastProgression) <
+        kotlin.math.abs(currentProgression - targetProgression)
 }
 
 internal fun shouldRecordVisualLocator(lastRecorded: Locator?, current: Locator): Boolean {
