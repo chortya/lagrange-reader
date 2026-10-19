@@ -990,6 +990,7 @@ class AppCoordinator internal constructor(
             val current = _screen.value as? AppScreen.Login ?: return@launch
             serverSignInVerificationJob?.cancel()
             serverSignInVerificationJob = null
+            runCatching { repository.cancelInteractiveSignIn() }
             _screen.value = current.copy(serverSignIn = null)
         }
     }

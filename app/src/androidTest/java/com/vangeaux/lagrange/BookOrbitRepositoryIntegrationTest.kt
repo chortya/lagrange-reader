@@ -970,6 +970,31 @@ class BookOrbitRepositoryIntegrationTest {
     }
 
     @Test
+    fun closingServerSignInOrLeavingTheServerDoesNotKeepBlockingCovers() = runBlocking {
+        val serverUrl = server.url("/").toString().trimEnd('/')
+        val coverUrl = server.url("/api/v1/books/book-1/thumbnail").toString()
+        val book = BookSummary("library-1", "book-1", null, "Book", coverUrl = coverUrl)
+        server.enqueue(jsonResponse("""{"accessToken":"account-a"}"""))
+        repository.login("account-a", "secret")
+        server.takeRequest(5, TimeUnit.SECONDS)!!
+
+        // The sign-in page is closed without signing in: the signed-in account gets covers again.
+        repository.beginInteractiveSignIn()
+        repository.cancelInteractiveSignIn()
+        server.enqueue(MockResponse().setBody("after-cancel"))
+        assertEquals("after-cancel", repository.loadBookCover(book)?.decodeToString())
+        server.takeRequest(5, TimeUnit.SECONDS)!!
+
+        // A sign-in is started and the user switches to another server profile with a saved session.
+        repository.beginInteractiveSignIn()
+        repository.clearServer()
+        repository.setServerUrl(serverUrl)
+        android.webkit.CookieManager.getInstance().setCookie(serverUrl, "session=restored")
+        server.enqueue(MockResponse().setBody("after-switch"))
+        assertEquals("after-switch", repository.loadBookCover(book)?.decodeToString())
+    }
+
+    @Test
     fun coversSurviveSwitchingServerProfilesAndSigningBackIn() = runBlocking {
         val serverUrl = server.url("/").toString().trimEnd('/')
         val coverUrl = server.url("/api/v1/books/book-1/thumbnail").toString()

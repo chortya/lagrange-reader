@@ -90,12 +90,12 @@ private object CatalogImageCoordinator {
     val memoryCache = LinkedHashMap<String, ByteArray>(32, 0.75f, true)
     var memoryCacheBytes = 0L
     /**
-     * An interactive (server page) sign-in has started and not authenticated yet. The previous
-     * account's token or cookies may still be present, so no cover request may create or use a cache
-     * scope until the new account is known.
+     * Profile whose interactive (server page) sign-in has started and not authenticated yet. The
+     * previous account's token or cookies may still be present, so no cover request for that profile
+     * may create or use a cache scope until the new account is known.
      */
     @Volatile
-    var interactiveSignInPending = false
+    var interactiveSignInProfileKey: String? = null
 }
 
 internal class CatalogImageRequestScope(
@@ -356,6 +356,8 @@ interface BookOrbitDataSource {
     suspend fun beginInteractiveSignIn() {}
     /** The interactive sign-in started by [beginInteractiveSignIn] has authenticated. */
     suspend fun completeInteractiveSignIn() {}
+    /** The interactive sign-in was closed without signing in. */
+    suspend fun cancelInteractiveSignIn() {}
     suspend fun getServerUrl(): String?
     suspend fun setServerUrl(serverUrl: String)
     suspend fun clearServer()
@@ -640,11 +642,13 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
         requestUrl: String? = null
     ): CatalogImageRequestScope {
             val generation = CatalogImageCoordinator.generation.get()
-            if (CatalogImageCoordinator.interactiveSignInPending) throw StaleCatalogImageRequestException()
             val preferences = context.dataStore.data.first()
             val serverUrl = preferences[Keys.SERVER_URL].orEmpty()
             val profileId = ServerProfileStore(context).active()?.id
                 ?: serverUrl.takeIf(String::isNotBlank)?.let(::serverProfileId)
+            if (CatalogImageCoordinator.interactiveSignInProfileKey == (profileId ?: serverUrl)) {
+                throw StaleCatalogImageRequestException()
+            }
             val accessToken = preferences[Keys.ACCESS_TOKEN]
             val cookie = requestUrl
                 ?.takeIf { sameHttpOrigin(it, serverUrl) }
@@ -751,6 +755,8 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
         // Covers stay on disk: they are scoped by server, profile and account, so switching
         // profiles (which goes through here) keeps each profile's covers for offline use.
         mutateCatalogImageSession {
+            // Leaving the server ends any sign-in started on it.
+            CatalogImageCoordinator.interactiveSignInProfileKey = null
             OfflineCacheScheduler.cancelAll(context)
             CoverCacheWarmWorker.cancelAll(context)
             libraryCoverAspectRatios = emptyMap()
@@ -769,19 +775,25 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
         mutateCatalogImageSession {
             catalogImageAccountScopeStore.clear(currentProfileId() ?: getServerUrl().orEmpty())
             // Until the new account has signed in, the old credentials must not create its scope.
-            CatalogImageCoordinator.interactiveSignInPending = true
+            CatalogImageCoordinator.interactiveSignInProfileKey = currentProfileId() ?: getServerUrl().orEmpty()
         }
     }
 
     override suspend fun completeInteractiveSignIn() {
         // The next cover request creates a fresh scope with the new account's credentials.
-        mutateCatalogImageSession { CatalogImageCoordinator.interactiveSignInPending = false }
+        mutateCatalogImageSession { CatalogImageCoordinator.interactiveSignInProfileKey = null }
+    }
+
+    override suspend fun cancelInteractiveSignIn() {
+        // Nobody new signed in. The account scope was already cleared, so whoever is signed in
+        // now starts a fresh scope and cannot see covers cached for a previous account.
+        mutateCatalogImageSession { CatalogImageCoordinator.interactiveSignInProfileKey = null }
     }
 
     override suspend fun clearSession() {
         mutateCatalogImageSession(clearDiskCacheAfter = true) {
             catalogImageAccountScopeStore.clear(currentProfileId() ?: getServerUrl().orEmpty())
-            CatalogImageCoordinator.interactiveSignInPending = false
+            CatalogImageCoordinator.interactiveSignInProfileKey = null
             clearRuntimeSession()
             currentProfileId()?.let(profileSessionStore::clear)
         }
@@ -918,7 +930,7 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
                 currentProfileId() ?: serverUrl,
                 catalogImageUserAccountScope(serverUrl, username)
             )
-            CatalogImageCoordinator.interactiveSignInPending = false
+            CatalogImageCoordinator.interactiveSignInProfileKey = null
         }
     }
 
@@ -969,7 +981,7 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
                 currentProfileId() ?: getServerUrl().orEmpty(),
                 "oidc:" + java.util.UUID.randomUUID()
             )
-            CatalogImageCoordinator.interactiveSignInPending = false
+            CatalogImageCoordinator.interactiveSignInProfileKey = null
         }
     }
 
