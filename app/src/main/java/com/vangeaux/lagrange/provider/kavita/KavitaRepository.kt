@@ -45,7 +45,11 @@ internal class KavitaRepository(context: Context) : BookOrbitDataSource, Profile
         authModule.clearSession()
     }
 
-    override suspend fun clearSession() = authModule.clearSession()
+    override suspend fun clearSession() {
+        // Per-book languages are kept per profile across profile switches; sign-out forgets them.
+        EpubBookLanguageStore(appContext).clearProfile()
+        authModule.clearSession()
+    }
 
     override suspend fun getSelectedLibraryId(): String? =
         preferences.getString(SELECTED_LIBRARY_KEY, null)

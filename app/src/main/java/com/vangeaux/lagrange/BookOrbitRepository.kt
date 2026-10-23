@@ -807,6 +807,8 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
         mutateCatalogImageSession(clearDiskCacheAfter = true) {
             catalogImageAccountScopeStore.clear(currentProfileId() ?: getServerUrl().orEmpty())
             CatalogImageCoordinator.interactiveSignInProfileKey = null
+            // Per-book languages are kept per profile across profile switches; sign-out forgets them.
+            EpubBookLanguageStore(context).clearProfile()
             clearRuntimeSession()
             currentProfileId()?.let(profileSessionStore::clear)
         }
@@ -836,7 +838,6 @@ class BookOrbitRepository(private val context: Context) : BookOrbitDataSource, P
         epubReaderPositionStore.clear()
         ReadiumEpubLocatorStore(context).clear()
         ReadiumEpubTtsPositionStore(context).clear()
-        EpubBookLanguageStore(context).clear()
         clearCookies()
     }
 

@@ -100,7 +100,7 @@ Automated coverage: `EpubTypesettingPreferencesTest` (JVM); `EpubTypesettingActi
 - Hyphenation Off removes hyphens; Left with On hyphenates ragged text.
 - Changes apply without reopening the book, from the reader options and from the library reader settings.
 - A book whose metadata declares no language is hyphenated in the device language.
-- Book language (in-book options → This book): Auto shows the source (book or device). Choosing another language switches read-aloud voices immediately, even while playing, and changes hyphenation; it is remembered for that book only. Auto restores the book's language. Automated: `EpubBookLanguageInstrumentedTest` (voice list per language with the system speech engine, page language, persistence), `EpubBookLanguageTest` (JVM).
+- Book language (in-book options → This book): Auto shows the source (book or device). Choosing another language switches read-aloud voices immediately, even while playing, and changes hyphenation; it is remembered for that book on that server profile only: the same book on another server or account keeps its own choice. Auto restores the book's language. Automated: `EpubBookLanguageInstrumentedTest` (voice list per language with the system speech engine, page language, persistence), `EpubBookLanguageTest` (JVM).
 
 ### EPUB Image Library
 

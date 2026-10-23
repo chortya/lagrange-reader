@@ -138,25 +138,45 @@ internal fun epubBookLanguageChoice(
     )
 }
 
-/** Per-book language override, keyed like the reading position. Absent means Auto. */
-internal class EpubBookLanguageStore(context: Context) {
+/**
+ * Per-book language override, kept separately for each saved server profile (account), because
+ * the same book ID can exist on another server or account. Absent means Auto.
+ */
+internal class EpubBookLanguageStore(context: Context, private val profileId: String?) {
+    /** Scoped to the active profile, read once: a reader keeps the profile it was opened with. */
+    constructor(context: Context) : this(context, ServerProfileStore(context).activeId())
+
     private val preferences = context.getSharedPreferences(
         "readium_epub_book_languages",
         Context.MODE_PRIVATE
     )
 
     fun read(readerKey: String): String? =
-        readerKey.takeIf { it.isNotBlank() }?.let { preferences.getString(it, null) }
+        readerKey.takeIf { it.isNotBlank() }
+            ?.let { preferences.getString(epubBookLanguageKey(profileId, it), null) }
 
     fun save(readerKey: String, languageTag: String?) {
         if (readerKey.isBlank()) return
+        val key = epubBookLanguageKey(profileId, readerKey)
         val tag = languageTag?.trim()?.takeIf { it.isNotEmpty() }
         preferences.edit().apply {
-            if (tag == null) remove(readerKey) else putString(readerKey, tag)
+            if (tag == null) remove(key) else putString(key, tag)
         }.apply()
     }
 
-    fun clear() {
-        preferences.edit().clear().apply()
+    /** Forgets this profile's choices; other profiles keep theirs. */
+    fun clearProfile() {
+        val prefix = epubBookLanguageKeyPrefix(profileId)
+        val keys = preferences.all.keys.filter { it.startsWith(prefix) }
+        if (keys.isEmpty()) return
+        preferences.edit().apply { keys.forEach(::remove) }.apply()
     }
 }
+
+/** URL-safe Base64 never contains '/', so a profile ID cannot spill into the reader key. */
+private fun epubBookLanguageKeyPrefix(profileId: String?): String =
+    java.util.Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(profileId.orEmpty().toByteArray(Charsets.UTF_8)) + "/"
+
+internal fun epubBookLanguageKey(profileId: String?, readerKey: String): String =
+    epubBookLanguageKeyPrefix(profileId) + readerKey

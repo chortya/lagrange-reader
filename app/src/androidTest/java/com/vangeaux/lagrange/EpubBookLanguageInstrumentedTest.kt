@@ -210,6 +210,27 @@ class EpubBookLanguageInstrumentedTest {
     }
 
     @Test
+    fun choicesStaySeparateBetweenProfilesAndSignOutClearsOnlyItsOwn() {
+        // The same book ID on another server or account must not pick up this choice.
+        val first = EpubBookLanguageStore(context, "profile-first-${System.nanoTime()}")
+        val second = EpubBookLanguageStore(context, "profile-second-${System.nanoTime()}")
+        try {
+            first.save(readerKey, "en")
+            assertNull(second.read(readerKey))
+            second.save(readerKey, "de")
+            assertEquals("en", first.read(readerKey))
+            assertEquals("de", second.read(readerKey))
+
+            first.clearProfile()
+            assertNull(first.read(readerKey))
+            assertEquals("de", second.read(readerKey))
+        } finally {
+            first.clearProfile()
+            second.clearProfile()
+        }
+    }
+
+    @Test
     fun overrideReplacesALanguageDeclaredInTheChapterAndAutoRestoresIt() = runBlocking {
         // Readium leaves a chapter's own lang/xml:lang alone; the override must still win.
         writeEpub(epub, language = "nl", documentLanguage = "nl")

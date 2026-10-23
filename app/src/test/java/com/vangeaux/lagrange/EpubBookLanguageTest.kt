@@ -2,6 +2,7 @@ package com.vangeaux.lagrange
 
 import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -97,5 +98,16 @@ class EpubBookLanguageTest {
         assertTrue(epubDocumentLanguageScript("  ").trimEnd().endsWith("})(null);"))
         // Quoted as a JavaScript string, so a stored tag cannot break out of the script.
         assertTrue(epubDocumentLanguageScript("x\"); alert(1); (\"").contains("\"x\\\"); alert(1); (\\\"\""))
+    }
+
+    @Test
+    fun `stored choices are keyed per profile`() {
+        val book = "book-1|file-1"
+        assertEquals(epubBookLanguageKey("profile-a", book), epubBookLanguageKey("profile-a", book))
+        assertNotEquals(epubBookLanguageKey("profile-a", book), epubBookLanguageKey("profile-b", book))
+        assertNotEquals(epubBookLanguageKey("profile-a", book), epubBookLanguageKey(null, book))
+        // A profile ID cannot run into the reader key and collide with another profile's key.
+        assertNotEquals(epubBookLanguageKey("a/b", "c"), epubBookLanguageKey("a", "b/c"))
+        assertNotEquals(epubBookLanguageKey("a|b", "c"), epubBookLanguageKey("a", "b|c"))
     }
 }
